@@ -1,0 +1,32 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+# Secrets and env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+# Go
+backend/bin/
+*.test
+*.out
+coverage.*
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Node
+node_modules/
+frontend/dist/
+# Docker / infra data
+infrastructure/docker/data/
+*.tfstate*
+.terraform/
+# Load test output
+tests/load/results/
