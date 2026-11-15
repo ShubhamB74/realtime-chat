@@ -22,7 +22,7 @@ func okHandler() http.Handler {
 
 func TestRequestIDGeneratedWhenAbsent(t *testing.T) {
 	rec := httptest.NewRecorder()
-	RequestID(okHandler()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	RequestID(okHandler()).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	id := rec.Header().Get(RequestIDHeader)
 	if !validRequestID.MatchString(id) || rec.Body.String() != id {
 		t.Fatalf("header=%q body=%q", id, rec.Body.String())
@@ -30,7 +30,7 @@ func TestRequestIDGeneratedWhenAbsent(t *testing.T) {
 }
 
 func TestRequestIDEchoedWhenValidReplacedWhenNot(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.Header.Set(RequestIDHeader, "client-id-12345")
 	rec := httptest.NewRecorder()
 	RequestID(okHandler()).ServeHTTP(rec, req)
@@ -38,7 +38,7 @@ func TestRequestIDEchoedWhenValidReplacedWhenNot(t *testing.T) {
 		t.Errorf("valid id not echoed: %q", got)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.Header.Set(RequestIDHeader, "bad id\twith spaces")
 	rec = httptest.NewRecorder()
 	RequestID(okHandler()).ServeHTTP(rec, req)
@@ -55,7 +55,7 @@ func TestRecoverReturnsStandardError(t *testing.T) {
 	}), RequestID, Recover(logger))
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/boom", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", nil))
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d", rec.Code)
@@ -74,7 +74,7 @@ func TestRecoverReturnsStandardError(t *testing.T) {
 
 func TestNotFoundUsesErrorContract(t *testing.T) {
 	rec := httptest.NewRecorder()
-	Chain(http.HandlerFunc(NotFound), RequestID).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
+	Chain(http.HandlerFunc(NotFound), RequestID).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/nope", nil))
 	var body ErrorBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestAccessLogOmitsQueryString(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 	h := Chain(okHandler(), RequestID, AccessLog(logger))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/things?token=topsecret", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/things?token=topsecret", nil))
 
 	out := logs.String()
 	if strings.Contains(out, "topsecret") {
@@ -108,7 +108,7 @@ func TestAccessLogOmitsQueryString(t *testing.T) {
 
 func TestSecurityHeaders(t *testing.T) {
 	rec := httptest.NewRecorder()
-	SecurityHeaders(okHandler()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	SecurityHeaders(okHandler()).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	if rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("Cache-Control") != "no-store" {
 		t.Errorf("headers = %v", rec.Header())
 	}
@@ -139,7 +139,8 @@ func TestServerGracefulShutdownFinishesInflightRequest(t *testing.T) {
 	})
 	srv := NewServer("127.0.0.1:0", h, Timeouts{ReadHeader: time.Second, Read: time.Second, Write: 5 * time.Second, Idle: time.Second}, logger)
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

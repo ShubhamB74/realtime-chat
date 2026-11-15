@@ -22,7 +22,7 @@ func down(context.Context) error { return errors.New("connection refused: host=s
 func call(t *testing.T, h *Handler) (int, readinessResponse, string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	h.Readiness(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	h.Readiness(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil))
 	var resp readinessResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("bad json: %v", err)
@@ -32,7 +32,7 @@ func call(t *testing.T, h *Handler) (int, readinessResponse, string) {
 
 func TestLiveness(t *testing.T) {
 	rec := httptest.NewRecorder()
-	Liveness(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	Liveness(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -96,7 +96,8 @@ func TestReadinessDraining(t *testing.T) {
 }
 
 func TestTCPChecks(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

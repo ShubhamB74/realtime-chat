@@ -14,8 +14,8 @@ func env(m map[string]string) func(string) string {
 
 func valid() map[string]string {
 	return map[string]string{
-		"DATABASE_URL": "postgres://chat:s3cret@localhost:5432/db?sslmode=disable",
-		"REDIS_URL":    "redis://:s3cret@localhost:6379/0",
+		"DATABASE_URL": "postgres://chat@localhost:5432/db?sslmode=disable",
+		"REDIS_URL":    "redis://localhost:6379/0",
 	}
 }
 
@@ -76,7 +76,7 @@ func TestProductionRejectsPlaintextDatabase(t *testing.T) {
 	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "sslmode=disable") {
 		t.Fatalf("expected sslmode error, got %v", err)
 	}
-	m["DATABASE_URL"] = "postgres://chat:x@db:5432/db?sslmode=require"
+	m["DATABASE_URL"] = "postgres://chat@db:5432/db?sslmode=require"
 	if _, err := Load(env(m)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
