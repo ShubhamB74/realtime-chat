@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+app/__init__.py
+app/main.py
+realtime_chat_ai_service.egg-info/PKG-INFO
+realtime_chat_ai_service.egg-info/SOURCES.txt
+realtime_chat_ai_service.egg-info/dependency_links.txt
+realtime_chat_ai_service.egg-info/requires.txt
+realtime_chat_ai_service.egg-info/top_level.txt
+tests/test_health.py
