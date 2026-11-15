@@ -8,7 +8,7 @@ internal/
   domain/       # business logic, no infrastructure imports
   app/          # use cases / services
   transport/    # http, ws, grpc handlers
-  store/        # postgres, redis, kafka, minio adapters
+  store/        # postgres, redis, kafka, object-store adapters
   platform/     # config, logging, telemetry, shutdown
 migrations/     # SQL migrations (forward + rollback)
 ```

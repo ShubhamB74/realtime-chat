@@ -12,7 +12,7 @@ Changes from the original instruction file, and why.
 | Phase | Scope | Exit criteria |
 |---|---|---|
 | 0 | Requirements, HLD, LLD, ADRs, repo | Checklist approved |
-| 1 | Docker Compose with profiles (`core`: Postgres, Redis, MinIO; `streaming`: Kafka + UI), Go/Python/TS skeletons, migrations (users, sessions, devices), CI | Clone-and-run documented and executed |
+| 1 (code written, **awaiting your local verification**) | Docker Compose with profiles (`core`: Postgres, Redis, object store; `streaming`: Kafka + UI), Go/Python/TS skeletons, migrations (users, sessions, devices), CI | Clone-and-run documented and executed |
 | 2 | Auth (Argon2id, rotation, revocation), authorization, conversations | Negative authorization tests pass |
 | 3 | **Thin slice**: WS gateway (bounded queues, heartbeats), message persistence with `seq`/`mod_seq`, idempotency, history, cursor sync, edit/delete, minimal presence, **k6 harness + baseline** | Messages survive restart; reconnect recovers via sync; baseline recorded |
 | 4A | Fast path over Redis pub/sub, connection registry, cross-gateway delivery, device cursors, receipts as cursors, unread counts, presence subscriptions | Two gateways deliver across each other; Redis outage degrades to sync without loss |

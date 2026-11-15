@@ -21,7 +21,7 @@ flowchart TB
   API --> PG[("PostgreSQL: messages, cursors, outbox")]
   GW --> PG
   GW <-->|"registry + pub/sub bus"| RD[("Redis")]
-  API --> MN[("MinIO")]
+  API --> MN[("Object store (S3-compatible)")]
   PG --> OB["Outbox Publisher"]
   OB --> KF{{"Kafka (derived pipelines only)"}}
   KF --> NS["Notification Service"]
@@ -131,7 +131,7 @@ flowchart TB
   WKp["Worker pods"] --> KFs{{"Kafka x3 (KRaft)"}}
   AIp["AI pods"] --> KFs
   AIp --> AIDBs[("AI database")]
-  APIp --> MNs[("MinIO")]
+  APIp --> MNs[("Object store (S3-compatible)")]
   OTel["OTel Collector"] --> PR["Prometheus"] --> GF["Grafana"]
 ```
 Deploy behavior: gateways drain connections gracefully (long termination grace period), clients reconnect with exponential backoff and jitter to avoid reconnect storms.
