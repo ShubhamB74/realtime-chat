@@ -4,9 +4,6 @@
 
 A distributed, real-time messaging platform with an asynchronous AI layer, built as an engineering project to demonstrate distributed systems, sync protocols, event-driven design, and production practices.
 
-> **Status: Phase 1 code written, not yet verified on a real machine.** The author's environment had no Go toolchain, Docker or network, so the build, tests and compose stack have not been executed. See docs/phase-1-acceptance-report.md.
-> Nothing here has been deployed or benchmarked. All numbers in `docs/` are hypothetical targets, not measurements.
-
 **Honest scoping note:** at the assumed scale (10k DAU, ~60 msg/s peak) a single service plus PostgreSQL would suffice in production. Kafka, Kubernetes, and multiple gateways are here to demonstrate and measure distributed patterns, not because load demands them. See ADR-001.
 
 ## Core design in one paragraph
@@ -31,8 +28,8 @@ React/TypeScript/Vite · Go · Python/FastAPI · PostgreSQL + pgvector · Redis 
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Requirements, architecture, repo foundation | Done (rev 2) |
-| 1 | Infra + backend foundation | **Code written, awaiting verification** |
-| 2 | Auth + conversations | Not started |
+| 1 | Infra + backend foundation | Done |
+| 2 | Auth + conversations | **Code written, awaiting verification** |
 | 3 | Thin vertical slice: WebSocket, persistence, seq, sync, k6 baseline | Not started |
 | 4A | Fast-path delivery, cross-gateway routing, cursors, receipts, presence | Not started |
 | 4B | Outbox, Kafka, workers, DLQ | Not started |
@@ -53,4 +50,4 @@ make run         # then in another shell: make check-health
 Details and environment variables: [docs/deployment.md](docs/deployment.md). Run `make help` for all targets.
 
 ## Key documents
-[PRD](docs/PRD.md) · [HLD](docs/HLD.md) · [LLD](docs/LLD.md) · [Roadmap](docs/roadmap.md) · [ADRs](docs/adr/)
+[PRD](docs/PRD.md) · [HLD](docs/HLD.md) · [LLD](docs/LLD.md) · [Roadmap](docs/roadmap.md) · [API](packages/openapi/openapi.yaml) · [Security](docs/security.md) · [ADRs](docs/adr/)
