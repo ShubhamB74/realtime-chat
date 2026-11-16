@@ -26,6 +26,19 @@ type Config struct {
 	KafkaBrokers    []string
 	ObjectStoreAddr string
 
+	// Authentication (ADR-009). JWTSecret is never logged.
+	JWTSecret          string
+	AuthIssuer         string
+	AccessTokenTTL     time.Duration
+	RefreshTokenTTL    time.Duration
+	SessionMaxLifetime time.Duration
+	MaxDevices         int
+	Argon2MemoryKiB    uint32
+	Argon2Time         uint32
+	Argon2Threads      uint8
+	HashConcurrency    int // 0 means one slot per CPU
+	TrustProxyHeaders  bool
+
 	ShutdownTimeout   time.Duration
 	ReadinessTimeout  time.Duration
 	ReadHeaderTimeout time.Duration
@@ -58,6 +71,19 @@ func Load(getenv func(string) string) (Config, error) {
 		return d
 	}
 
+	num := func(key string, def, lo, hi int64) int64 {
+		raw := strings.TrimSpace(getenv(key))
+		if raw == "" {
+			return def
+		}
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || n < lo || n > hi {
+			errs = append(errs, fmt.Errorf("%s: must be an integer between %d and %d", key, lo, hi))
+			return def
+		}
+		return n
+	}
+
 	cfg := Config{
 		Env:               str("APP_ENV", "development"),
 		HTTPAddr:          str("HTTP_ADDR", ":8080"),
@@ -66,6 +92,17 @@ func Load(getenv func(string) string) (Config, error) {
 		DatabaseURL:       strings.TrimSpace(getenv("DATABASE_URL")),
 		RedisURL:          strings.TrimSpace(getenv("REDIS_URL")),
 		ObjectStoreAddr:   strings.TrimSpace(getenv("OBJECT_STORE_ADDR")),
+		JWTSecret:          strings.TrimSpace(getenv("AUTH_JWT_SECRET")),
+		AuthIssuer:         str("AUTH_ISSUER", "realtime-chat"),
+		AccessTokenTTL:     dur("AUTH_ACCESS_TTL", 15*time.Minute),
+		RefreshTokenTTL:    dur("AUTH_REFRESH_TTL", 30*24*time.Hour),
+		SessionMaxLifetime: dur("AUTH_SESSION_MAX_LIFETIME", 90*24*time.Hour),
+		MaxDevices:         int(num("AUTH_MAX_DEVICES", 20, 1, 100)),
+		Argon2MemoryKiB:    uint32(num("ARGON2_MEMORY_KIB", 64*1024, 8, 1<<20)),   //nolint:gosec // range-checked above
+		Argon2Time:         uint32(num("ARGON2_TIME", 3, 1, 10)),                   //nolint:gosec // range-checked above
+		Argon2Threads:      uint8(num("ARGON2_THREADS", 2, 1, 16)),                 //nolint:gosec // range-checked above
+		HashConcurrency:    int(num("ARGON2_MAX_CONCURRENT", 0, 0, 64)),
+		TrustProxyHeaders:  boolEnv(getenv("TRUST_PROXY_HEADERS"), &errs),
 		ShutdownTimeout:   dur("SHUTDOWN_TIMEOUT", 20*time.Second),
 		ReadinessTimeout:  dur("READINESS_TIMEOUT", 2*time.Second),
 		ReadHeaderTimeout: dur("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
@@ -100,6 +137,16 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 	}
 
+	if len(cfg.JWTSecret) < 32 {
+		errs = append(errs, errors.New("AUTH_JWT_SECRET: required, at least 32 characters (run `make env` to generate one)"))
+	}
+	if cfg.RefreshTokenTTL < cfg.AccessTokenTTL {
+		errs = append(errs, errors.New("AUTH_REFRESH_TTL: must not be shorter than AUTH_ACCESS_TTL"))
+	}
+	if cfg.SessionMaxLifetime < cfg.RefreshTokenTTL {
+		errs = append(errs, errors.New("AUTH_SESSION_MAX_LIFETIME: must not be shorter than AUTH_REFRESH_TTL"))
+	}
+
 	if cfg.DatabaseURL == "" {
 		errs = append(errs, errors.New("DATABASE_URL: required"))
 	} else if u, err := url.Parse(cfg.DatabaseURL); err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
@@ -130,8 +177,24 @@ func (c Config) LogValue() slog.Value {
 		slog.String("redis", redact(c.RedisURL)),
 		slog.Any("kafka_brokers", c.KafkaBrokers),
 		slog.String("object_store_addr", c.ObjectStoreAddr),
+		slog.Duration("access_token_ttl", c.AccessTokenTTL),
+		slog.Duration("refresh_token_ttl", c.RefreshTokenTTL),
+		slog.Bool("trust_proxy_headers", c.TrustProxyHeaders),
 		slog.Duration("shutdown_timeout", c.ShutdownTimeout),
 	)
+}
+
+func boolEnv(raw string, errs *[]error) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	b, err := strconv.ParseBool(raw)
+	if err != nil {
+		*errs = append(*errs, errors.New("TRUST_PROXY_HEADERS: must be true or false"))
+		return false
+	}
+	return b
 }
 
 func redact(raw string) string {

@@ -107,6 +107,7 @@ Codes: `invalid_request`, `unauthenticated`, `forbidden`, `not_found`, `conflict
 - Refresh token: opaque, random, stored hashed, rotated on use; reuse of a rotated token revokes the session family.
 - Revocation checked on refresh and WS handshake; long-lived WS connections re-validate on a schedule and on a revocation message via the registry.
 - Authorization enforced server-side on every resource; client-supplied IDs never trusted.
+- Phase 2 clarifications (ADR-009): the session id in tokens is the refresh-token **family id**; access tokens are HS256 JWTs with claims `sub`, `sid`, `did`; strangers and removed members get the same 404 as missing resources.
 
 ## 8. Event conventions (details in event-catalog.md)
 Envelope: `event_id`, `event_type`, `schema_version`, `occurred_at`, `producer`, `conversation_id` (partition key), `payload`. Topics are `chat.<name>.v<N>`. Additive changes only within a version. Payloads carry IDs, not message bodies, wherever consumers can fetch authorized content themselves.

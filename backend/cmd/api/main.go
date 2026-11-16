@@ -15,12 +15,16 @@ import (
 	"syscall"
 	"time"
 
+	"realtime-chat/backend/internal/app/accounts"
+	"realtime-chat/backend/internal/app/chats"
+	"realtime-chat/backend/internal/auth"
 	"realtime-chat/backend/internal/platform/config"
 	"realtime-chat/backend/internal/platform/health"
 	"realtime-chat/backend/internal/platform/httpx"
 	"realtime-chat/backend/internal/platform/logging"
 	"realtime-chat/backend/internal/store/postgres"
 	redisstore "realtime-chat/backend/internal/store/redis"
+	"realtime-chat/backend/internal/transport/httpapi"
 )
 
 func main() { os.Exit(run()) }
@@ -78,6 +82,33 @@ func run() int {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health.Liveness)
 	mux.HandleFunc("GET /readyz", readiness.Readiness)
+
+	store := postgres.NewStore(pool)
+	hasher := auth.NewHasher(auth.Params{
+		Memory: cfg.Argon2MemoryKiB, Time: cfg.Argon2Time, Threads: cfg.Argon2Threads, KeyLen: 32, SaltLen: 16,
+	}, cfg.HashConcurrency)
+	tokens, err := auth.NewTokenIssuer([]byte(cfg.JWTSecret), cfg.AuthIssuer, cfg.AccessTokenTTL, nil)
+	if err != nil {
+		logger.Error("invalid authentication configuration", slog.String("error", err.Error()))
+		return 2
+	}
+	accountsSvc, err := accounts.New(store, hasher, tokens, accounts.Config{
+		RefreshTTL:         cfg.RefreshTokenTTL,
+		SessionMaxLifetime: cfg.SessionMaxLifetime,
+		MaxDevices:         cfg.MaxDevices,
+	}, logger)
+	if err != nil {
+		logger.Error("accounts service failed to start", slog.String("error", err.Error()))
+		return 1
+	}
+	httpapi.New(httpapi.Deps{
+		Accounts:   accountsSvc,
+		Chats:      chats.New(store),
+		Tokens:     tokens,
+		Limiter:    redisstore.NewLimiter(rdb, "rl:"),
+		Logger:     logger,
+		TrustProxy: cfg.TrustProxyHeaders,
+	}).Register(mux)
 	mux.HandleFunc("/", httpx.NotFound)
 
 	handler := httpx.Chain(mux,

@@ -9,6 +9,7 @@ fi
 rand() { head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 pg="$(rand)"
 rd="$(rand)"
-sed -e "s/CHANGE_ME_POSTGRES/${pg}/g" -e "s/CHANGE_ME_REDIS/${rd}/g" .env.example > .env
+jwt="$(rand)$(rand)"
+sed -e "s/CHANGE_ME_POSTGRES/${pg}/g" -e "s/CHANGE_ME_REDIS/${rd}/g" -e "s/CHANGE_ME_JWT/${jwt}/g" .env.example > .env
 chmod 600 .env
 echo "Created .env with generated secrets."

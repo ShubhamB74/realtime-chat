@@ -41,8 +41,15 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U ci -d ci"
           --health-interval 5s --health-timeout 3s --health-retries 12
+      redis:
+        image: redis:8.6
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 12
     env:
       DATABASE_URL: postgres://ci:ci-only-not-a-secret@localhost:5432/ci?sslmode=disable
+      REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -52,7 +59,7 @@ jobs:
       - run: go tool goose -dir migrations postgres "$DATABASE_URL" up
       - run: go tool goose -dir migrations postgres "$DATABASE_URL" down-to 0 && go tool goose -dir migrations postgres "$DATABASE_URL" up
         name: migrations roll back and re-apply cleanly
-      - run: go test -tags=integration -race -count=1 ./internal/store/...
+      - run: go test -tags=integration -race -count=1 ./internal/...
 
   ai-service:
     runs-on: ubuntu-latest

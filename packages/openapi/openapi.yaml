@@ -1,0 +1,451 @@
+openapi: 3.0.3
+info:
+  title: Real-Time Chat & Messaging Platform API
+  version: 0.2.0
+  description: |
+    REST API for Phase 2 (authentication, profiles, devices, sessions, conversations).
+    Hand-maintained; a unit test checks that every registered route appears here.
+    Real-time messaging (WebSocket) is specified in docs/LLD.md and arrives in Phase 3.
+
+    Conventions
+    - Authenticated endpoints need `Authorization: Bearer <access_token>`.
+    - All errors use the shared error contract (`Error` schema).
+    - Resources a caller may not see answer 404, indistinguishable from missing ones.
+    - Any request may return 429 (`Retry-After` header) and 500.
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: auth
+  - name: profile
+  - name: devices
+  - name: conversations
+security:
+  - bearerAuth: []
+paths:
+  /v1/auth/register:
+    post:
+      tags: [auth]
+      summary: Create an account (does not log in)
+      security: []
+      requestBody: { $ref: '#/components/requestBodies/Register' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { type: object, properties: { user: { $ref: '#/components/schemas/User' } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Log in and start a session on a device
+      description: Wrong password and unknown email are indistinguishable (401).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, device]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+                device:
+                  type: object
+                  required: [name, platform]
+                  properties:
+                    id: { type: string, format: uuid, description: Existing device id to reuse }
+                    name: { type: string, maxLength: 100 }
+                    platform: { type: string, enum: [web, ios, android, desktop, other] }
+      responses:
+        '200': { $ref: '#/components/responses/Tokens' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate the refresh token
+      description: |
+        Returns a new access token and a new refresh token. The old refresh token becomes invalid.
+        Presenting an already-rotated token revokes the whole session (theft detection), so clients
+        must serialize refresh calls and always store the newest token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/Tokens' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke the current session
+      description: The access token stays valid until it expires (default 15 minutes); refresh tokens are revoked immediately.
+      responses:
+        '204': { description: Logged out }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/me:
+    get:
+      tags: [profile]
+      summary: Current user
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { user: { $ref: '#/components/schemas/User' } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [profile]
+      summary: Update display name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [display_name]
+              properties:
+                display_name: { type: string, minLength: 1, maxLength: 100 }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { user: { $ref: '#/components/schemas/User' } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/users/lookup:
+    get:
+      tags: [profile]
+      summary: Find a user by exact email (id and display name only)
+      description: Rate limited (30/min per user). Unknown, malformed and disabled all return 404.
+      parameters:
+        - { name: email, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { user: { $ref: '#/components/schemas/User' } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/devices:
+    get:
+      tags: [devices]
+      summary: List the caller's active devices
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { $ref: '#/components/schemas/Device' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/devices/{id}:
+    delete:
+      tags: [devices]
+      summary: Revoke a device and all of its sessions
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '204': { description: Revoked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/sessions:
+    get:
+      tags: [devices]
+      summary: List the caller's live sessions
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { sessions: { type: array, items: { $ref: '#/components/schemas/Session' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/sessions/{id}:
+    delete:
+      tags: [devices]
+      summary: Revoke one session
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '204': { description: Revoked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/conversations/direct:
+    post:
+      tags: [conversations]
+      summary: Get or create the direct conversation with another user
+      description: Returns 201 when created, 200 when it already existed. One per user pair.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
+      responses:
+        '200': { $ref: '#/components/responses/Conversation' }
+        '201': { $ref: '#/components/responses/Conversation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/conversations/groups:
+    post:
+      tags: [conversations]
+      summary: Create a group (the caller becomes admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, member_ids]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 100 }
+                member_ids: { type: array, minItems: 1, maxItems: 255, items: { type: string, format: uuid } }
+      responses:
+        '201': { $ref: '#/components/responses/Conversation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/conversations:
+    get:
+      tags: [conversations]
+      summary: List the caller's conversations, most recently updated first
+      description: '`last_message` and `unread_count` are reserved (null / 0) until Phases 3 and 4A.'
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 30 } }
+        - { name: cursor, in: query, schema: { type: string }, description: Opaque value from `next_cursor` }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversations: { type: array, items: { $ref: '#/components/schemas/Conversation' } }
+                  next_cursor: { type: string, nullable: true }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/conversations/{id}:
+    get:
+      tags: [conversations]
+      summary: Get a conversation (members only)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Conversation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [conversations]
+      summary: Rename a group (admin only)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 100 }
+      responses:
+        '200': { $ref: '#/components/responses/Conversation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/conversations/{id}/members:
+    get:
+      tags: [conversations]
+      summary: List active members (members only)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { members: { type: array, items: { $ref: '#/components/schemas/Member' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [conversations]
+      summary: Add members to a group (admin only)
+      description: Users who are already members are skipped. A group has at most 256 members.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_ids]
+              properties:
+                user_ids: { type: array, minItems: 1, maxItems: 100, items: { type: string, format: uuid } }
+      responses:
+        '200': { description: Members actually added, content: { application/json: { schema: { type: object, properties: { added: { type: array, items: { $ref: '#/components/schemas/Member' } } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/conversations/{id}/members/{userId}:
+    delete:
+      tags: [conversations]
+      summary: Remove a member, or leave (userId = caller)
+      description: |
+        Admins may remove anyone; any member may remove themselves. If the last admin leaves, the
+        longest-standing member is promoted. Not allowed for direct conversations.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/UserId' }
+      responses:
+        '204': { description: Removed }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/conversations/{id}/members/{userId}/role:
+    put:
+      tags: [conversations]
+      summary: Change a member's role (admin only)
+      description: A group must always keep at least one admin (409 otherwise).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/UserId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [admin, member] }
+      responses:
+        '204': { description: Updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/conversations/{id}/settings:
+    get:
+      tags: [conversations]
+      summary: Conversation-level settings (members only)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Settings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [conversations]
+      summary: Enable or disable AI for a group (admin only; default off)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ai_enabled]
+              properties:
+                ai_enabled: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/Settings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    UserId: { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+  requestBodies:
+    Register:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [email, password, display_name]
+            properties:
+              email: { type: string, format: email }
+              password: { type: string, minLength: 10, maxLength: 128 }
+              display_name: { type: string, minLength: 1, maxLength: 100 }
+  responses:
+    BadRequest: { description: Invalid request, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Unauthorized: { description: Missing or invalid credentials, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: Authenticated but not allowed, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: Not found (or not visible to the caller), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Conflict: { description: Conflict with current state, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After: { schema: { type: integer }, description: Seconds until the window resets }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Tokens:
+      description: Credentials
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              access_token: { type: string }
+              token_type: { type: string, example: Bearer }
+              expires_in: { type: integer, description: Seconds }
+              refresh_token: { type: string }
+              session_id: { type: string, format: uuid }
+              device_id: { type: string, format: uuid }
+              user: { $ref: '#/components/schemas/User' }
+    Conversation:
+      description: Conversation
+      content: { application/json: { schema: { type: object, properties: { conversation: { $ref: '#/components/schemas/Conversation' } } } } }
+    Settings:
+      description: Settings
+      content: { application/json: { schema: { type: object, properties: { settings: { type: object, properties: { ai_enabled: { type: boolean } } } } } } }
+  schemas:
+    Error:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code: { type: string, enum: [invalid_request, unauthenticated, forbidden, not_found, conflict, rate_limited, payload_too_large, unavailable, internal] }
+        message: { type: string }
+        request_id: { type: string }
+        retryable: { type: boolean }
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, description: Present only for the caller's own profile }
+        display_name: { type: string }
+        created_at: { type: string, format: date-time }
+    Device:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        platform: { type: string }
+        last_seen_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        current: { type: boolean }
+    Session:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        device_name: { type: string }
+        platform: { type: string }
+        started_at: { type: string, format: date-time }
+        last_refreshed_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        current: { type: boolean }
+    Member:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        display_name: { type: string }
+        role: { type: string, enum: [admin, member] }
+        joined_at: { type: string, format: date-time }
+    Conversation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [direct, group] }
+        title: { type: string, nullable: true }
+        created_by: { type: string, format: uuid, nullable: true }
+        member_count: { type: integer }
+        role: { type: string, enum: [admin, member], description: The caller's role }
+        peer: { type: object, description: Other participant (direct conversations in list responses), properties: { user_id: { type: string }, display_name: { type: string } } }
+        last_message: { nullable: true, description: Reserved; always null until Phase 3 }
+        unread_count: { type: integer, description: Reserved; always 0 until Phase 4A }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
