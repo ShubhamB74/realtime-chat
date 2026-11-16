@@ -59,7 +59,7 @@ jobs:
     defaults: { run: { working-directory: ai-service } }
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12" }
       - run: pip install -r requirements-dev.lock && pip install -e . --no-deps
       - run: ruff check . && ruff format --check .
