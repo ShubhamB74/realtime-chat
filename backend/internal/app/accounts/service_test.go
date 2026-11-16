@@ -28,8 +28,10 @@ func (f *fakeHasher) Verify(_ context.Context, pw, enc string) (bool, bool, erro
 
 type fakeTokens struct{}
 
-func (fakeTokens) Issue(u, s, d string) (string, error) { return "access:" + u + ":" + s + ":" + d, nil }
-func (fakeTokens) TTL() time.Duration                    { return 15 * time.Minute }
+func (fakeTokens) Issue(u, s, d string) (string, error) {
+	return "access:" + u + ":" + s + ":" + d, nil
+}
+func (fakeTokens) TTL() time.Duration { return 15 * time.Minute }
 
 type fakeRepo struct {
 	users       map[string]domain.User // by email
@@ -87,9 +89,11 @@ func (r *fakeRepo) RevokeFamily(_ context.Context, userID, fam string) (bool, er
 	r.revoked = append(r.revoked, userID+"/"+fam)
 	return true, nil
 }
-func (r *fakeRepo) ListActiveSessions(context.Context, string) ([]domain.SessionInfo, error) { return nil, nil }
-func (r *fakeRepo) ListDevices(context.Context, string) ([]domain.Device, error)              { return nil, nil }
-func (r *fakeRepo) RevokeDevice(context.Context, string, string) error                         { return nil }
+func (r *fakeRepo) ListActiveSessions(context.Context, string) ([]domain.SessionInfo, error) {
+	return nil, nil
+}
+func (r *fakeRepo) ListDevices(context.Context, string) ([]domain.Device, error) { return nil, nil }
+func (r *fakeRepo) RevokeDevice(context.Context, string, string) error           { return nil }
 
 func newService(t *testing.T) (*Service, *fakeRepo, *fakeHasher) {
 	t.Helper()
@@ -112,12 +116,12 @@ func login(email, pw string) LoginInput {
 func TestRegisterValidation(t *testing.T) {
 	s, _, _ := newService(t)
 	cases := map[string]RegisterInput{
-		"bad email":        {Email: "not-an-email", Password: "long-enough-pw", DisplayName: "A"},
+		"bad email":         {Email: "not-an-email", Password: "long-enough-pw", DisplayName: "A"},
 		"display-name form": {Email: "Alice <a@example.com>", Password: "long-enough-pw", DisplayName: "A"},
-		"short password":   {Email: "a@example.com", Password: "short", DisplayName: "A"},
-		"huge password":    {Email: "a@example.com", Password: strings.Repeat("x", 129), DisplayName: "A"},
-		"empty name":       {Email: "a@example.com", Password: "long-enough-pw", DisplayName: "  "},
-		"control chars":    {Email: "a@example.com", Password: "long-enough-pw", DisplayName: "bad\x07name"},
+		"short password":    {Email: "a@example.com", Password: "short", DisplayName: "A"},
+		"huge password":     {Email: "a@example.com", Password: strings.Repeat("x", 129), DisplayName: "A"},
+		"empty name":        {Email: "a@example.com", Password: "long-enough-pw", DisplayName: "  "},
+		"control chars":     {Email: "a@example.com", Password: "long-enough-pw", DisplayName: "bad\x07name"},
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {

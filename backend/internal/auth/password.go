@@ -101,7 +101,7 @@ func (h *Hasher) Verify(ctx context.Context, password, encoded string) (ok, need
 	if err != nil || len(want) == 0 {
 		return false, false, ErrMalformedHash
 	}
-	p.KeyLen = uint32(len(want)) //nolint:gosec // length of a decoded hash, bounded by the stored string
+	p.KeyLen = uint32(len(want))  //nolint:gosec // length of a decoded hash, bounded by the stored string
 	p.SaltLen = uint32(len(salt)) //nolint:gosec // as above
 
 	release, err := h.acquire(ctx)

@@ -31,12 +31,12 @@ frontend-deps: ## Install frontend dependencies with exact versions (creates pac
 			@types/react @types/react-dom @types/node tailwindcss @tailwindcss/vite
 
 ai-deps: ## Create venv and lock files for the AI service
-	cd ai-service && python3 -m venv .venv \
-		&& .venv/bin/pip install --upgrade pip \
-		&& .venv/bin/pip install -e . \
-		&& .venv/bin/pip freeze --exclude-editable > requirements.lock \
-		&& .venv/bin/pip install -e ".[dev]" \
-		&& .venv/bin/pip freeze --exclude-editable > requirements-dev.lock
+	cd ai-service && python -m venv .venv \
+		&& .venv/Scripts/python.exe -m pip install --upgrade pip \
+		&& .venv/Scripts/python.exe -m pip install -e . \
+		&& .venv/Scripts/python.exe -m pip freeze --exclude-editable > requirements.lock \
+		&& .venv/Scripts/python.exe -m pip install -e ".[dev]" \
+		&& .venv/Scripts/python.exe -m pip freeze --exclude-editable > requirements-dev.lock
 
 bootstrap: env deps frontend-deps ai-deps ## One-time setup: env, Go, frontend and AI dependencies
 
@@ -90,18 +90,19 @@ test-integration: ## Integration tests: PostgreSQL schema/store, Redis limiter, 
 
 lint: ## golangci-lint (backend) and ruff + mypy (ai-service)
 	cd backend && golangci-lint run ./...
-	cd ai-service && .venv/bin/ruff check . && .venv/bin/mypy app
+	cd ai-service && .venv/Scripts/python.exe -m ruff check .
+	cd ai-service && .venv/Scripts/python.exe -m mypy app
 
 fmt: ## Format Go and Python code
 	cd backend && gofmt -w . 
-	cd ai-service && .venv/bin/ruff format .
+	cd ai-service && .venv/Scripts/python.exe -m ruff format .
 
 check-health: ## Probe the running backend
 	@curl -fsS http://127.0.0.1:8080/healthz && echo && curl -sS http://127.0.0.1:8080/readyz && echo
 
 # ---- other services --------------------------------------------------------------------------
 ai-test: ## AI service tests
-	cd ai-service && .venv/bin/pytest -q
+	cd ai-service && .venv/Scripts/python.exe -m pytest -q
 
 frontend-build: ## Typecheck and build the frontend
 	cd frontend && npm run build

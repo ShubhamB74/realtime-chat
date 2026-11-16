@@ -46,7 +46,9 @@ func (f *fakeRepo) GetConversation(_ context.Context, id string) (domain.Convers
 	title := "Team"
 	return domain.Conversation{ID: id, Type: f.convTypes[id], Title: &title}, nil
 }
-func (f *fakeRepo) ActiveMemberCount(_ context.Context, id string) (int, error) { return len(f.roles[id]), nil }
+func (f *fakeRepo) ActiveMemberCount(_ context.Context, id string) (int, error) {
+	return len(f.roles[id]), nil
+}
 func (f *fakeRepo) UpdateTitle(_ context.Context, id, title string) (domain.Conversation, error) {
 	return domain.Conversation{ID: id, Type: domain.ConvGroup, Title: &title}, nil
 }

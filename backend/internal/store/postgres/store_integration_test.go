@@ -261,7 +261,9 @@ func TestDirectConversationIsUniquePerPairUnderConcurrency(t *testing.T) {
 	if n != 2 {
 		t.Errorf("direct conversation must have exactly 2 members, got %d", n)
 	}
-	t.Cleanup(func() { _, _ = pool(t).Exec(context.Background(), `DELETE FROM conversations WHERE id = $1::uuid`, ids[0]) })
+	t.Cleanup(func() {
+		_, _ = pool(t).Exec(context.Background(), `DELETE FROM conversations WHERE id = $1::uuid`, ids[0])
+	})
 }
 
 func mkGroup(t *testing.T, s *postgres.Store, creator domain.User, others ...domain.User) domain.Conversation {
@@ -274,7 +276,9 @@ func mkGroup(t *testing.T, s *postgres.Store, creator domain.User, others ...dom
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool(t).Exec(context.Background(), `DELETE FROM conversations WHERE id = $1::uuid`, c.ID) })
+	t.Cleanup(func() {
+		_, _ = pool(t).Exec(context.Background(), `DELETE FROM conversations WHERE id = $1::uuid`, c.ID)
+	})
 	return c
 }
 

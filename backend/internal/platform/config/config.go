@@ -85,30 +85,30 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	cfg := Config{
-		Env:               str("APP_ENV", "development"),
-		HTTPAddr:          str("HTTP_ADDR", ":8080"),
-		LogLevel:          str("LOG_LEVEL", "info"),
-		LogFormat:         str("LOG_FORMAT", "json"),
-		DatabaseURL:       strings.TrimSpace(getenv("DATABASE_URL")),
-		RedisURL:          strings.TrimSpace(getenv("REDIS_URL")),
-		ObjectStoreAddr:   strings.TrimSpace(getenv("OBJECT_STORE_ADDR")),
+		Env:                str("APP_ENV", "development"),
+		HTTPAddr:           str("HTTP_ADDR", ":8080"),
+		LogLevel:           str("LOG_LEVEL", "info"),
+		LogFormat:          str("LOG_FORMAT", "json"),
+		DatabaseURL:        strings.TrimSpace(getenv("DATABASE_URL")),
+		RedisURL:           strings.TrimSpace(getenv("REDIS_URL")),
+		ObjectStoreAddr:    strings.TrimSpace(getenv("OBJECT_STORE_ADDR")),
 		JWTSecret:          strings.TrimSpace(getenv("AUTH_JWT_SECRET")),
 		AuthIssuer:         str("AUTH_ISSUER", "realtime-chat"),
 		AccessTokenTTL:     dur("AUTH_ACCESS_TTL", 15*time.Minute),
 		RefreshTokenTTL:    dur("AUTH_REFRESH_TTL", 30*24*time.Hour),
 		SessionMaxLifetime: dur("AUTH_SESSION_MAX_LIFETIME", 90*24*time.Hour),
 		MaxDevices:         int(num("AUTH_MAX_DEVICES", 20, 1, 100)),
-		Argon2MemoryKiB:    uint32(num("ARGON2_MEMORY_KIB", 64*1024, 8, 1<<20)),   //nolint:gosec // range-checked above
-		Argon2Time:         uint32(num("ARGON2_TIME", 3, 1, 10)),                   //nolint:gosec // range-checked above
-		Argon2Threads:      uint8(num("ARGON2_THREADS", 2, 1, 16)),                 //nolint:gosec // range-checked above
+		Argon2MemoryKiB:    uint32(num("ARGON2_MEMORY_KIB", 64*1024, 8, 1<<20)), //nolint:gosec // range-checked above
+		Argon2Time:         uint32(num("ARGON2_TIME", 3, 1, 10)),                //nolint:gosec // range-checked above
+		Argon2Threads:      uint8(num("ARGON2_THREADS", 2, 1, 16)),              //nolint:gosec // range-checked above
 		HashConcurrency:    int(num("ARGON2_MAX_CONCURRENT", 0, 0, 64)),
 		TrustProxyHeaders:  boolEnv(getenv("TRUST_PROXY_HEADERS"), &errs),
-		ShutdownTimeout:   dur("SHUTDOWN_TIMEOUT", 20*time.Second),
-		ReadinessTimeout:  dur("READINESS_TIMEOUT", 2*time.Second),
-		ReadHeaderTimeout: dur("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
-		ReadTimeout:       dur("HTTP_READ_TIMEOUT", 15*time.Second),
-		WriteTimeout:      dur("HTTP_WRITE_TIMEOUT", 30*time.Second),
-		IdleTimeout:       dur("HTTP_IDLE_TIMEOUT", 60*time.Second),
+		ShutdownTimeout:    dur("SHUTDOWN_TIMEOUT", 20*time.Second),
+		ReadinessTimeout:   dur("READINESS_TIMEOUT", 2*time.Second),
+		ReadHeaderTimeout:  dur("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+		ReadTimeout:        dur("HTTP_READ_TIMEOUT", 15*time.Second),
+		WriteTimeout:       dur("HTTP_WRITE_TIMEOUT", 30*time.Second),
+		IdleTimeout:        dur("HTTP_IDLE_TIMEOUT", 60*time.Second),
 	}
 
 	switch cfg.Env {

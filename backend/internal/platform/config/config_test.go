@@ -14,8 +14,8 @@ func env(m map[string]string) func(string) string {
 
 func valid() map[string]string {
 	return map[string]string{
-		"DATABASE_URL": "postgres://chat:s3cret@localhost:5432/db?sslmode=disable",
-		"REDIS_URL":    "redis://:s3cret@localhost:6379/0",
+		"DATABASE_URL":    "postgres://chat@localhost:5432/db?sslmode=disable",
+		"REDIS_URL":       "redis://localhost:6379/0",
 		"AUTH_JWT_SECRET": "0123456789abcdef0123456789abcdef0123",
 	}
 }

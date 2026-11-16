@@ -256,7 +256,10 @@ func TestUsersCannotAccessConversationsTheyDoNotBelongTo(t *testing.T) {
 
 	// Carol is a stranger: every endpoint answers 404, indistinguishable from a missing id.
 	missing := a.expect(a.do("GET", "/v1/conversations/00000000-0000-0000-0000-00000000dead", carol.Access, nil), 404, "missing conversation")
-	for name, rq := range map[string]struct{ m, p string; body any }{
+	for name, rq := range map[string]struct {
+		m, p string
+		body any
+	}{
 		"get":      {"GET", path, nil},
 		"rename":   {"PATCH", path, map[string]any{"title": "pwned"}},
 		"members":  {"GET", path + "/members", nil},

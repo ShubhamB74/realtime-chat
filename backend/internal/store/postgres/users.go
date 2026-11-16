@@ -44,8 +44,7 @@ func (s *Store) UserByEmail(ctx context.Context, email string) (domain.User, str
 // UserByID returns a user by id.
 func (s *Store) UserByID(ctx context.Context, id string) (domain.User, error) {
 	var u domain.User
-	err := s.pool.QueryRow(ctx, `SELECT `+userCols+` FROM users WHERE id = $1::uuid`, id,
-	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Status, &u.CreatedAt)
+	err := s.pool.QueryRow(ctx, `SELECT `+userCols+` FROM users WHERE id = $1::uuid`, id).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Status, &u.CreatedAt)
 	if err != nil {
 		return domain.User{}, notFoundIfNoRows(err, "user by id")
 	}
