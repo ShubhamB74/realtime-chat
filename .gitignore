@@ -30,3 +30,6 @@ infrastructure/docker/data/
 .terraform/
 # Load test output
 tests/load/results/
+
+# Load-test seed data contains access tokens
+tests/load/data/

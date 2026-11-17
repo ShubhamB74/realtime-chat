@@ -13,7 +13,7 @@ import (
 func normalizeUUID(raw string) (string, error) { return chats.NormalizeID(raw) }
 
 func detailDTO(d chats.Detail) conversationDTO {
-	return toConversation(d.Conversation, d.MemberCount, d.Role, nil)
+	return toConversation(d.Conversation, d.MemberCount, d.Role, nil, nil)
 }
 
 func (s *Server) openDirect(w http.ResponseWriter, r *http.Request, id auth.Identity) {
@@ -71,7 +71,7 @@ func (s *Server) listConversations(w http.ResponseWriter, r *http.Request, id au
 	}
 	out := make([]conversationDTO, 0, len(items))
 	for _, it := range items {
-		out = append(out, toConversation(it.Conversation, it.MemberCount, it.Role, it.Peer))
+		out = append(out, toConversation(it.Conversation, it.MemberCount, it.Role, it.Peer, it.LastMessage))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"conversations": out, "next_cursor": encodeCursor(next)})
 }

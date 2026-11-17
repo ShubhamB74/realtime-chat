@@ -1,12 +1,13 @@
 package httpx
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"regexp"
 	"runtime/debug"
@@ -84,8 +85,25 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// Unwrap lets http.ResponseController reach the underlying writer (needed for WebSockets later).
+// Unwrap lets http.ResponseController reach the underlying writer.
 func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// Hijack lets the WebSocket upgrade take over the connection through this wrapper. The
+// recorded status becomes 101 so access logs show the upgrade.
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := http.NewResponseController(s.ResponseWriter).Hijack()
+	if err == nil {
+		s.status, s.wrote = http.StatusSwitchingProtocols, true
+	}
+	return conn, rw, err
+}
+
+// Flush supports streaming responses.
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
 
 // AccessLog logs one line per request: method, path (no query string), status, size, duration.
 // It never logs headers, query strings, or bodies. Probe endpoints log at debug level.
@@ -125,7 +143,7 @@ func Recover(logger *slog.Logger) func(http.Handler) http.Handler {
 				if rec == nil {
 					return
 				}
-				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+				if rec == http.ErrAbortHandler {
 					panic(rec)
 				}
 				logger.ErrorContext(r.Context(), "panic recovered",

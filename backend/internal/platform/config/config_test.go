@@ -176,3 +176,34 @@ func TestAuthValidation(t *testing.T) {
 		t.Fatalf("cfg=%+v err=%v", cfg, err)
 	}
 }
+
+func TestWebSocketSettings(t *testing.T) {
+	cfg, err := Load(env(valid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WSMaxConnsPerUser != 5 || cfg.WSSendQueue != 256 || cfg.WSPingInterval != 25*time.Second || cfg.WSReadLimitBytes != 32768 || len(cfg.WSAllowedOrigins) != 0 {
+		t.Errorf("unexpected defaults: %+v", cfg)
+	}
+	m := valid()
+	m["WS_ALLOWED_ORIGINS"] = " localhost:5173, ,chat.example.com "
+	cfg, err = Load(env(m))
+	if err != nil || len(cfg.WSAllowedOrigins) != 2 || cfg.WSAllowedOrigins[1] != "chat.example.com" {
+		t.Fatalf("origins: %+v err=%v", cfg.WSAllowedOrigins, err)
+	}
+	for name, override := range map[string]map[string]string{
+		"pong not shorter than ping": {"WS_PING_INTERVAL": "10s", "WS_PONG_TIMEOUT": "10s"},
+		"queue too small":            {"WS_SEND_QUEUE": "0"},
+		"read limit too small":       {"WS_READ_LIMIT_BYTES": "10"},
+		"bad per-user limit":         {"WS_MAX_CONNS_PER_USER": "0"},
+		"queue bytes too small":      {"WS_MAX_QUEUE_BYTES": "10"},
+	} {
+		m := valid()
+		for k, v := range override {
+			m[k] = v
+		}
+		if _, err := Load(env(m)); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+}

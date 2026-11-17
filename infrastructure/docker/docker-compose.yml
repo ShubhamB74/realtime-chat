@@ -115,6 +115,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?run make env}
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-localhost:5173,127.0.0.1:5173}
       # Optional dependencies: reported by /readyz, never fail readiness.
       KAFKA_BROKERS: kafka:9092
       OBJECT_STORE_ADDR: objectstore:8333

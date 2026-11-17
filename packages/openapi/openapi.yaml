@@ -1,11 +1,12 @@
 openapi: 3.0.3
 info:
   title: Real-Time Chat & Messaging Platform API
-  version: 0.2.0
+  version: 0.3.0
   description: |
-    REST API for Phase 2 (authentication, profiles, devices, sessions, conversations).
+    REST API through Phase 3 (authentication, profiles, devices, sessions, conversations, messages, sync, presence)
+    plus the WebSocket upgrade endpoint.
     Hand-maintained; a unit test checks that every registered route appears here.
-    Real-time messaging (WebSocket) is specified in docs/LLD.md and arrives in Phase 3.
+    The WebSocket event protocol is specified in docs/websocket-protocol.md.
 
     Conventions
     - Authenticated endpoints need `Authorization: Bearer <access_token>`.
@@ -19,6 +20,8 @@ tags:
   - name: profile
   - name: devices
   - name: conversations
+  - name: messages
+  - name: realtime
 security:
   - bearerAuth: []
 paths:
@@ -343,12 +346,158 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /v1/conversations/{id}/messages:
+    post:
+      tags: [messages]
+      summary: Send a message (REST alternative to the WebSocket `message.send`)
+      description: |
+        The message is committed before the response is sent. Retrying with the same
+        `idempotency_key` returns the original message (200, `duplicate: true`).
+        The same key used for a different conversation is a 409.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idempotency_key, body]
+              properties:
+                idempotency_key: { type: string, minLength: 8, maxLength: 64, pattern: '^[A-Za-z0-9._-]+$' }
+                body: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        '200': { $ref: '#/components/responses/MessageResult' }
+        '201': { $ref: '#/components/responses/MessageResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [messages]
+      summary: History, newest first
+      description: |
+        Only messages from the moment the caller joined are visible (join-point rule, ADR-010).
+        Deleted messages appear as tombstones (null body).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: before_seq, in: query, schema: { type: integer, minimum: 0 }, description: Return messages with seq below this (0 or absent = latest) }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages: { type: array, items: { $ref: '#/components/schemas/Message' } }
+                  has_more: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/conversations/{id}/messages/{messageId}:
+    patch:
+      tags: [messages]
+      summary: Edit your own message
+      description: Keeps `seq`, assigns a new `mod_seq`, sets `edited_at`. Deleted messages cannot be edited (409).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/MessageId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { message: { $ref: '#/components/schemas/Message' } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [messages]
+      summary: Delete a message (tombstone)
+      description: The sender, or a group admin, may delete. Deleting an already deleted message is a no-op returning the tombstone.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/MessageId' }
+      responses:
+        '200': { description: The tombstone, content: { application/json: { schema: { type: object, properties: { message: { $ref: '#/components/schemas/Message' } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/conversations/{id}/changes:
+    get:
+      tags: [messages]
+      summary: Sync - everything created, edited or deleted after a cursor
+      description: |
+        Returns messages whose `mod_seq` is greater than `after_mod_seq`, ordered by `mod_seq`.
+        Keep the highest `mod_seq` you have applied as your cursor; if `has_more` is true, call
+        again with it. Apply changes idempotently (see docs/websocket-protocol.md).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: after_mod_seq, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  changes: { type: array, items: { $ref: '#/components/schemas/Message' } }
+                  has_more: { type: boolean }
+                  last_seq: { type: integer, description: The conversation counter; equal to your cursor means you are up to date }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/conversations/{id}/presence:
+    get:
+      tags: [realtime]
+      summary: Which members are online (members only, best effort)
+      description: '`available` is false for groups above 50 members, when presence is disabled, or when the presence store is down.'
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available: { type: boolean }
+                  online: { type: array, items: { type: string, format: uuid } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/ws:
+    get:
+      tags: [realtime]
+      summary: WebSocket upgrade (protocol rtc.v1)
+      description: |
+        Authenticate with `Authorization: Bearer <access_token>`, or - for browsers - by offering the
+        subprotocols `rtc.v1` and `bearer.<access_token>`. Query-string tokens are rejected. The
+        session is checked at the handshake and re-checked periodically; a revoked session is
+        closed with code 4001. Slow consumers are closed with 4002. Event protocol:
+        docs/websocket-protocol.md.
+      security: []
+      responses:
+        '101': { description: Switching protocols }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { description: Gateway at capacity or shutting down, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
   parameters:
     Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     UserId: { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    MessageId: { name: messageId, in: path, required: true, schema: { type: string, format: uuid } }
   requestBodies:
     Register:
       required: true
@@ -389,6 +538,15 @@ components:
     Conversation:
       description: Conversation
       content: { application/json: { schema: { type: object, properties: { conversation: { $ref: '#/components/schemas/Conversation' } } } } }
+    MessageResult:
+      description: The stored message
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message: { $ref: '#/components/schemas/Message' }
+              duplicate: { type: boolean, description: True when this was an idempotent retry }
     Settings:
       description: Settings
       content: { application/json: { schema: { type: object, properties: { settings: { type: object, properties: { ai_enabled: { type: boolean } } } } } } }
@@ -445,7 +603,31 @@ components:
         member_count: { type: integer }
         role: { type: string, enum: [admin, member], description: The caller's role }
         peer: { type: object, description: Other participant (direct conversations in list responses), properties: { user_id: { type: string }, display_name: { type: string } } }
-        last_message: { nullable: true, description: Reserved; always null until Phase 3 }
+        last_seq: { type: integer, description: Conversation counter (bumped by every new message, edit and delete) }
+        last_message:
+          type: object
+          nullable: true
+          description: Latest message visible to the caller; only present in list responses (null elsewhere)
+          properties:
+            id: { type: string, format: uuid }
+            seq: { type: integer }
+            sender_id: { type: string, format: uuid, nullable: true }
+            body: { type: string, nullable: true, description: 'Truncated to 140 characters; null when deleted' }
+            deleted: { type: boolean }
+            created_at: { type: string, format: date-time }
         unread_count: { type: integer, description: Reserved; always 0 until Phase 4A }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    Message:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        sender_id: { type: string, format: uuid, nullable: true }
+        seq: { type: integer, description: Immutable display order within the conversation, starting at 1 }
+        mod_seq: { type: integer, description: Changes on every edit or delete; the sync cursor }
+        body: { type: string, nullable: true, description: Null for a deleted message (tombstone) }
+        edited_at: { type: string, format: date-time, nullable: true }
+        deleted_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        idempotency_key: { type: string, description: Echoed on send results only }

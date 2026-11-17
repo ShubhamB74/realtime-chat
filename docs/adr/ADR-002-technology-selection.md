@@ -33,6 +33,8 @@ Sources are web searches; secondary sources are marked. Anything not confirmed o
 | Go | 1.27 line (`go.mod` minimum 1.26) | Go 1.27 released 2026-08-19 (go.dev blog source); a secondary source reports 1.27.4 current | Verify patch at go.dev/dl |
 | Object store | SeaweedFS (dev) | ADR-008 | Image tag **not pinned**, see TODO in compose |
 | Kafka UI | `kafbat/kafka-ui` | Maintained fork name from memory | **Unverified, not pinned** |
+| WebSocket library | `github.com/coder/websocket` | pkg.go.dev shows v1.8.15 published 2026-06-15; maintained by Coder; resolved to an exact version by `make deps` | Verified (secondary check of repo activity); exact version recorded in `go.sum` |
+| k6 (load testing) | not pinned | Installed by the developer; version to be recorded with each baseline run | Not verified |
 | Node | 22 | Present in the development sandbox | Verified locally |
 | Python | 3.12 | Present in the development sandbox | Verified locally |
 | Go modules, npm and pip packages | Resolved by tooling at `make deps`, `make frontend-deps`, `make ai-deps` | Lock files (`go.sum`, `package-lock.json`, `requirements*.lock`) are the pin | **Not yet resolved**: no network in the authoring environment |

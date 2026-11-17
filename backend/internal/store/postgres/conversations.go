@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -157,7 +158,8 @@ func (s *Store) ListForUser(ctx context.Context, userID string, after *domain.Li
 		`SELECT c.id::text, c.type, c.title, c.created_by::text, c.last_seq, c.created_at, c.updated_at,
 		        m.role,
 		        (SELECT count(*) FROM conversation_members x WHERE x.conversation_id = c.id AND x.removed_at IS NULL),
-		        p.peer_id, p.peer_name
+		        p.peer_id, p.peer_name,
+		        l.id, l.seq, l.sender_id, l.body, l.deleted, l.created_at
 		 FROM conversation_members m
 		 JOIN conversations c ON c.id = m.conversation_id
 		 LEFT JOIN LATERAL (
@@ -165,6 +167,12 @@ func (s *Store) ListForUser(ctx context.Context, userID string, after *domain.Li
 		     FROM conversation_members pm JOIN users u ON u.id = pm.user_id
 		     WHERE c.type = 'direct' AND pm.conversation_id = c.id AND pm.user_id <> m.user_id
 		     LIMIT 1) p ON true
+		 LEFT JOIN LATERAL (
+		     SELECT lm.id::text AS id, lm.seq AS seq, lm.sender_id::text AS sender_id, lm.body AS body,
+		            (lm.deleted_at IS NOT NULL) AS deleted, lm.created_at AS created_at
+		     FROM messages lm
+		     WHERE lm.conversation_id = c.id AND lm.seq > m.joined_seq
+		     ORDER BY lm.seq DESC LIMIT 1) l ON true
 		 WHERE m.user_id = $1::uuid AND m.removed_at IS NULL
 		   AND ($2::timestamptz IS NULL OR (c.updated_at, c.id) < ($2::timestamptz, $3::text::uuid))
 		 ORDER BY c.updated_at DESC, c.id DESC
@@ -180,13 +188,27 @@ func (s *Store) ListForUser(ctx context.Context, userID string, after *domain.Li
 			cs       domain.ConversationSummary
 			peerID   *string
 			peerName *string
+			lmID     *string
+			lmSeq    *int64
+			lmSender *string
+			lmBody   *string
+			lmDel    *bool
+			lmAt     *time.Time
 		)
 		if err := rows.Scan(&cs.ID, &cs.Type, &cs.Title, &cs.CreatedBy, &cs.LastSeq, &cs.CreatedAt, &cs.UpdatedAt,
-			&cs.Role, &cs.MemberCount, &peerID, &peerName); err != nil {
+			&cs.Role, &cs.MemberCount, &peerID, &peerName,
+			&lmID, &lmSeq, &lmSender, &lmBody, &lmDel, &lmAt); err != nil {
 			return nil, nil, fmt.Errorf("scan conversation: %w", err)
 		}
 		if peerID != nil && peerName != nil {
 			cs.Peer = &domain.Peer{UserID: *peerID, DisplayName: *peerName}
+		}
+		if lmID != nil && lmSeq != nil && lmDel != nil && lmAt != nil {
+			cs.LastMessage = &domain.MessagePreview{ID: *lmID, Seq: *lmSeq, SenderID: lmSender, Deleted: *lmDel, CreatedAt: *lmAt}
+			if lmBody != nil {
+				p := truncateRunes(*lmBody, 140)
+				cs.LastMessage.Body = &p
+			}
 		}
 		out = append(out, cs)
 	}
@@ -270,10 +292,12 @@ func (s *Store) AddMembers(ctx context.Context, convID string, userIDs []string,
 			return domain.Invalid("Members can only be added to group conversations")
 		}
 		rows, err := tx.Query(ctx,
-			`INSERT INTO conversation_members (conversation_id, user_id, role)
-			 SELECT $1::uuid, u, 'member' FROM unnest($2::text[]::uuid[]) AS u
+			`INSERT INTO conversation_members (conversation_id, user_id, role, joined_seq)
+			 SELECT $1::uuid, u, 'member', (SELECT last_seq FROM conversations WHERE id = $1::uuid)
+			 FROM unnest($2::text[]::uuid[]) AS u
 			 ON CONFLICT (conversation_id, user_id) DO UPDATE
-			   SET removed_at = NULL, joined_at = now(), role = 'member', read_seq = 0
+			   SET removed_at = NULL, joined_at = now(), role = 'member', read_seq = 0,
+			       joined_seq = EXCLUDED.joined_seq
 			   WHERE conversation_members.removed_at IS NOT NULL
 			 RETURNING user_id::text`, convID, userIDs)
 		if err != nil {
@@ -396,4 +420,13 @@ func (s *Store) SetAIEnabled(ctx context.Context, convID string, enabled bool) (
 		return domain.Settings{}, notFoundIfNoRows(err, "set ai_enabled")
 	}
 	return st, nil
+}
+
+// truncateRunes shortens s to at most n runes, appending an ellipsis when cut.
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }

@@ -1,0 +1,98 @@
+<!doctype html>
+<!-- Development aid for Phase 3: log in, open the WebSocket, send messages, watch events, and
+     test reconnect + sync. Served by the Vite dev server at /ws-debug.html. Not the product UI. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WebSocket debug</title>
+<style>
+  body { font: 14px system-ui, sans-serif; max-width: 860px; margin: 1.5rem auto; padding: 0 1rem; }
+  fieldset { margin-bottom: 1rem; } input { margin: 0 .5rem .5rem 0; }
+  #log { background: #111; color: #ddd; padding: .75rem; height: 320px; overflow: auto; white-space: pre-wrap; font: 12px ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<h1>WebSocket debug</h1>
+<fieldset><legend>1. Account</legend>
+  <input id="email" placeholder="email" size="26"><input id="password" type="password" placeholder="password (10+ chars)">
+  <input id="name" placeholder="display name (register only)">
+  <button id="register">Register</button> <button id="login">Log in</button> <span id="who"></span>
+</fieldset>
+<fieldset><legend>2. Conversation</legend>
+  <button id="list">List conversations</button>
+  <select id="conv"></select>
+  <button id="history">Load history</button> <button id="presence">Who is online?</button>
+</fieldset>
+<fieldset><legend>3. Socket</legend>
+  <button id="connect">Connect</button> <button id="disconnect">Disconnect</button>
+  <input id="text" placeholder="message" size="40"> <button id="send">Send</button> <button id="typing">Typing</button>
+</fieldset>
+<div id="log"></div>
+<script>
+const API = '/api'; // proxied to the backend by vite.config.ts
+const $ = (id) => document.getElementById(id);
+const state = { access: null, refresh: null, deviceId: localStorage.getItem('dbg_device') || null, ws: null, cursors: {} };
+const log = (...a) => { const l = $('log'); l.textContent += a.map((x) => typeof x === 'string' ? x : JSON.stringify(x)).join(' ') + '\n'; l.scrollTop = l.scrollHeight; };
+
+async function api(method, path, body) {
+  const res = await fetch(API + path, { method, headers: { 'Content-Type': 'application/json', ...(state.access ? { Authorization: 'Bearer ' + state.access } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : null;
+  if (!res.ok) throw new Error(res.status + ' ' + JSON.stringify(json));
+  return json;
+}
+
+$('register').onclick = async () => { try { log('registered', await api('POST', '/v1/auth/register', { email: $('email').value, password: $('password').value, display_name: $('name').value || 'Debug' })); } catch (e) { log('ERR', e.message); } };
+$('login').onclick = async () => {
+  try {
+    const r = await api('POST', '/v1/auth/login', { email: $('email').value, password: $('password').value, device: { ...(state.deviceId ? { id: state.deviceId } : {}), name: 'ws-debug page', platform: 'web' } });
+    state.access = r.access_token; state.refresh = r.refresh_token; state.deviceId = r.device_id; localStorage.setItem('dbg_device', r.device_id);
+    $('who').textContent = 'logged in as ' + r.user.display_name; log('logged in; device', r.device_id);
+  } catch (e) { log('ERR', e.message); }
+};
+$('list').onclick = async () => {
+  try {
+    const r = await api('GET', '/v1/conversations');
+    $('conv').innerHTML = r.conversations.map((c) => `<option value="${c.id}">${c.title || ('DM with ' + (c.peer && c.peer.display_name))} (last_seq ${c.last_seq})</option>`).join('');
+    log('conversations', r.conversations.length);
+  } catch (e) { log('ERR', e.message); }
+};
+$('history').onclick = async () => { try { const r = await api('GET', `/v1/conversations/${$('conv').value}/messages?limit=20`); r.messages.reverse().forEach(applyMessage); log('history loaded', r.messages.length); } catch (e) { log('ERR', e.message); } };
+$('presence').onclick = async () => { try { log('presence', await api('GET', `/v1/conversations/${$('conv').value}/presence`)); } catch (e) { log('ERR', e.message); } };
+
+// The reducer is idempotent: duplicates and replays (fast path + sync) are harmless.
+function applyMessage(m) {
+  const cur = state.cursors[m.conversation_id] || 0;
+  if (m.mod_seq > cur) state.cursors[m.conversation_id] = m.mod_seq;
+  log(`msg ${m.conversation_id.slice(0, 8)} seq=${m.seq} mod=${m.mod_seq} ${m.deleted_at ? '[deleted]' : JSON.stringify(m.body)}`);
+}
+
+function send(type, payload, requestId) { state.ws.send(JSON.stringify({ v: 1, type, request_id: requestId || ('dbg-' + Date.now()), payload })); }
+
+$('connect').onclick = () => {
+  if (!state.access) return log('log in first');
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  // Browsers cannot set headers on a WebSocket: offer the token as a second subprotocol.
+  state.ws = new WebSocket(`${proto}://${location.host}${API}/v1/ws`, ['rtc.v1', 'bearer.' + state.access]);
+  state.ws.onopen = () => { log('socket open'); const known = Object.entries(state.cursors).slice(0, 20); if (known.length) send('sync.request', { conversations: known.map(([conversation_id, after_mod_seq]) => ({ conversation_id, after_mod_seq })) }, 'resync'); };
+  state.ws.onclose = (e) => log('socket closed', e.code, e.reason);
+  state.ws.onerror = () => log('socket error');
+  state.ws.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    if (ev.type === 'message.received' || ev.type === 'message.updated') applyMessage(ev.payload);
+    else if (ev.type === 'message.accepted') { applyMessage(ev.payload.message); log('  accepted', ev.request_id, ev.payload.duplicate ? '(duplicate)' : ''); }
+    else if (ev.type === 'sync.batch') { ev.payload.changes.forEach(applyMessage); log('  sync', ev.payload.status, 'has_more=' + ev.payload.has_more); }
+    else log(ev.type, ev.payload);
+  };
+};
+$('disconnect').onclick = () => state.ws && state.ws.close(1000, 'bye');
+$('send').onclick = () => {
+  if (!state.ws || state.ws.readyState !== 1) return log('not connected');
+  const key = 'dbg-' + crypto.randomUUID();
+  send('message.send', { conversation_id: $('conv').value, idempotency_key: key, body: $('text').value }, key);
+  $('text').value = '';
+};
+$('typing').onclick = () => state.ws && state.ws.readyState === 1 && send('typing.start', { conversation_id: $('conv').value });
+</script>
+</body>
+</html>

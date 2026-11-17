@@ -13,6 +13,7 @@ export default defineConfig({
       "/api": {
         target: apiTarget,
         changeOrigin: true,
+        ws: true, // proxy WebSocket upgrades (/api/v1/ws) too
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
     },

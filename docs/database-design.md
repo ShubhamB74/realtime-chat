@@ -31,3 +31,14 @@ Migrations use goose (`-- +goose Up/Down`), run via `make migrate-up`. Requires 
 **Query patterns behind the indexes:** membership lookup by `(conversation_id, user_id)` (primary key); "my conversations" by `user_id` on active rows, ordered by `conversations.updated_at, id` with keyset pagination. The ordering index on `conversations` was deliberately **not** added; add it only if query plans from real data show a need.
 
 **Known gaps:** empty groups (everyone left) remain as rows; `last_message` and unread are not stored yet; no purge of old sessions.
+
+## Phase 3 schema (migrations 00007 and 00008)
+**messages**: `id`, `conversation_id`, `sender_id` and `sender_device_id` (both nullable, set null on deletion), `idempotency_key`, `seq`, `mod_seq`, `body` (null for tombstones), `edited_at`, `deleted_at`, `created_at`. CHECK constraints: `seq > 0`, `mod_seq >= seq`, key length 8 to 64, and the body state rule (live: 1 to 4000 characters; deleted: null). Unique indexes: `(conversation_id, seq)` (the ordering authority), `(conversation_id, mod_seq)` (each counter value is held by one message; also serves sync) and `(sender_device_id, idempotency_key)` (idempotent retries).
+
+**conversation_members.joined_seq** (new column): the conversation counter when the member joined; visibility is `seq > joined_seq`. Reset when a removed member is re-added.
+
+**Counter discipline** (see ADR-003/010): every message write first locks the conversation row (`FOR UPDATE`) while verifying active membership in the same statement, then bumps `conversations.last_seq`. Rolled-back transactions undo the bump, so numbering has no gaps.
+
+**Query patterns:** history `WHERE conversation_id AND seq > joined_seq AND seq < before ORDER BY seq DESC` (unique `(conversation_id, seq)` index); sync `WHERE conversation_id AND mod_seq > cursor AND seq > joined_seq ORDER BY mod_seq` (unique `(conversation_id, mod_seq)` index); last-message preview via a lateral subquery on the newest `seq`. Indexes are derived from these patterns, **not yet validated with `EXPLAIN` on realistic data**.
+
+**Known gaps:** no outbox table yet (Phase 4B); edits overwrite the body with no history; no full-text index (Phase 6); no partitioning or archival (Phase 8); `sender_device_id` is set null when a device row is deleted, which weakens idempotency for that device only.

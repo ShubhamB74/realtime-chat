@@ -17,6 +17,7 @@ import (
 
 	"realtime-chat/backend/internal/app/accounts"
 	"realtime-chat/backend/internal/app/chats"
+	"realtime-chat/backend/internal/app/messages"
 	"realtime-chat/backend/internal/auth"
 	"realtime-chat/backend/internal/platform/config"
 	"realtime-chat/backend/internal/platform/health"
@@ -25,6 +26,7 @@ import (
 	"realtime-chat/backend/internal/store/postgres"
 	redisstore "realtime-chat/backend/internal/store/redis"
 	"realtime-chat/backend/internal/transport/httpapi"
+	"realtime-chat/backend/internal/transport/ws"
 )
 
 func main() { os.Exit(run()) }
@@ -101,9 +103,18 @@ func run() int {
 		logger.Error("accounts service failed to start", slog.String("error", err.Error()))
 		return 1
 	}
+	presence := redisstore.NewPresence(rdb, "presence:")
+	hub := ws.NewHub(wsConfig(cfg), ws.Deps{Sessions: store, Presence: presence, Tokens: tokens, Logger: logger})
+	messageSvc := messages.New(store, hub) // the hub is the best-effort live-delivery publisher
+	hub.Bind(messageSvc)
+	go logGatewayStats(ctx, hub, logger)
+
 	httpapi.New(httpapi.Deps{
 		Accounts:   accountsSvc,
 		Chats:      chats.New(store),
+		Messages:   messageSvc,
+		Presence:   presence,
+		WS:         hub,
 		Tokens:     tokens,
 		Limiter:    redisstore.NewLimiter(rdb, "rl:"),
 		Logger:     logger,
@@ -147,6 +158,11 @@ func run() int {
 	readiness.SetDraining()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
+	// WebSocket connections are hijacked, so http.Server.Shutdown does not wait for them: close
+	// them explicitly (clients get 1001 and reconnect with backoff, then sync).
+	if err := hub.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("websocket connections did not close in time", slog.String("error", err.Error()))
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", slog.String("error", err.Error()))
 		_ = srv.Close()
@@ -154,6 +170,33 @@ func run() int {
 	}
 	logger.Info("shutdown complete")
 	return 0
+}
+
+func wsConfig(c config.Config) ws.Config {
+	return ws.Config{
+		MaxConns: c.WSMaxConns, MaxConnsPerUser: c.WSMaxConnsPerUser, SendQueue: c.WSSendQueue, MaxQueueBytes: c.WSMaxQueueBytes,
+		PingInterval: c.WSPingInterval, PongTimeout: c.WSPongTimeout, WriteTimeout: c.WSWriteTimeout,
+		RevalidateInterval: c.WSRevalidateInterval, ReadLimit: c.WSReadLimitBytes,
+		EventRate: float64(c.WSEventRate), EventBurst: c.WSEventBurst, AllowedOrigins: c.WSAllowedOrigins,
+	}
+}
+
+// logGatewayStats periodically logs gateway counters (no per-connection or content data).
+func logGatewayStats(ctx context.Context, hub *ws.Hub, logger *slog.Logger) {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s := hub.Stats()
+			logger.Info("gateway stats",
+				slog.Int("connections", s.Connections), slog.Int64("accepted_total", s.Accepted),
+				slog.Int64("rejected_limit_total", s.RejectedLimit), slog.Int64("slow_consumers_total", s.SlowConsumers),
+				slog.Int64("published_total", s.Published), slog.Int64("delivered_total", s.Delivered))
+		}
+	}
 }
 
 func envOr(key, def string) string {

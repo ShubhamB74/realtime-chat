@@ -1,6 +1,6 @@
 # Security
 
-Status: Phase 2 threat model and controls. Controls are implemented in code and tests but **not yet executed** (see docs/phase-2-acceptance-report.md). No external security review has taken place.
+Status: Phase 2 and 3 threat model and controls. Controls are implemented in code and tests but **not yet executed** (see docs/phase-2-acceptance-report.md). No external security review has taken place.
 
 ## Principles
 Least privilege; server-side authorization on every resource; no hardcoded credentials; no message content, secrets or personal data in logs; AI output is untrusted; fail safely.
@@ -23,11 +23,18 @@ Accounts and credentials; message content (Phase 3+); session tokens; conversati
 | Abuse of unbounded resources | Body size limit; per-user and per-IP rate limits; group size cap (256); device cap (20); hashing concurrency bound; HTTP server timeouts | Limits are estimates, not yet load-tested |
 | Spoofed client IP for rate limits | `X-Forwarded-For` ignored unless `TRUST_PROXY_HEADERS=true`; then the right-most entry is used | Wrong setting behind a different proxy topology weakens limits |
 | Secrets in logs or errors | Config logging redacts credentials; JWT secret never logged; error responses never include internals; access log omits query strings and headers; panics log only the type | Needs a log audit in Phase 9 |
+| Unauthenticated or hijacked WebSocket | Token required at handshake (header or subprotocol, never the query string); session checked at handshake and every 60 s; origin allow-list for browsers | An open socket outlives access-token expiry until the session is revoked or the next re-check |
+| Cross-site WebSocket hijacking | `Origin` must match `WS_ALLOWED_ORIGINS` (or the same host); tokens are not cookies | Wrong allow-list entries weaken this |
+| Reading others' messages (IDOR) | Every history, sync, edit, delete and send resolves active membership first and is race-free against removal (conversation row lock); strangers get 404; new members see only post-join messages | None known; covered by unit, store and end-to-end tests |
+| Slow-consumer and flooding denial of service | Bounded queue (256 frames, 4 MiB) then disconnect; token bucket per connection plus 1/s sync limit; per-user and global connection caps; read limit 32 KiB; 4000-character messages | Limits are unmeasured; a distributed flood from many accounts is not addressed here |
+| Message duplication or loss on retry | Client idempotency keys enforced by a unique index inside the conversation lock | Keys are per device |
+| Panics taking the gateway down | Recovered per connection goroutine; only the panic type is logged | |
+| Message content in logs | Content is never logged: access log omits bodies and queries; gateway logs ids and counters only | Needs the Phase 9 log audit |
 | Misconfiguration | Startup validation: secret length, TTL ordering, `sslmode=disable` rejected in production | |
 | SQL injection | All queries are parameterized | |
 
 ## Not covered yet
-Email verification and password reset; MFA; account deletion and data export; audit events (Phase 5); CSRF (not applicable: bearer tokens, no cookies); TLS termination and HSTS (deployment); dependency and container vulnerability scanning (Phase 8); WebSocket authentication (Phase 3).
+Email verification and password reset; MFA; account deletion and data export; audit events (Phase 5); CSRF (not applicable: bearer tokens, no cookies); TLS termination, HSTS and `wss://` (deployment); dependency and container vulnerability scanning (Phase 8); content scanning and moderation (Phase 7); message edit history and retention policy (Phase 6); end-to-end encryption (out of scope, PRD).
 
 ## Operational notes
 - `AUTH_JWT_SECRET`: at least 32 characters, from a secret manager in production, never committed. Rotating it invalidates all access tokens (refresh tokens still work).

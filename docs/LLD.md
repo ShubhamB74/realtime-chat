@@ -64,7 +64,7 @@ Conventions: UUID primary keys (v7 considered for locality, decide in ADR when i
 - New message: `seq = mod_seq = new counter value`.
 - Edit or delete: bump the counter again, set only `mod_seq`. `seq` never changes (display order), `mod_seq` drives sync.
 
-## 4. WebSocket protocol v1 (draft)
+## 4. WebSocket protocol v1 (draft; the implemented protocol is in docs/websocket-protocol.md)
 Envelope (both directions):
 ```json
 {

@@ -101,19 +101,32 @@ type conversationDTO struct {
 	MemberCount int       `json:"member_count"`
 	Role        string    `json:"role"`
 	Peer        *peerDTO  `json:"peer,omitempty"`
+	LastSeq     int64     `json:"last_seq"`
 	LastMessage any       `json:"last_message"`
 	UnreadCount int       `json:"unread_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-func toConversation(c domain.Conversation, memberCount int, role string, peer *domain.Peer) conversationDTO {
+type lastMessageDTO struct {
+	ID        string    `json:"id"`
+	Seq       int64     `json:"seq"`
+	SenderID  *string   `json:"sender_id"`
+	Body      *string   `json:"body"` // truncated preview; null when deleted
+	Deleted   bool      `json:"deleted"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func toConversation(c domain.Conversation, memberCount int, role string, peer *domain.Peer, last *domain.MessagePreview) conversationDTO {
 	d := conversationDTO{
-		ID: c.ID, Type: c.Type, Title: c.Title, CreatedBy: c.CreatedBy,
+		ID: c.ID, Type: c.Type, Title: c.Title, CreatedBy: c.CreatedBy, LastSeq: c.LastSeq,
 		MemberCount: memberCount, Role: role, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}
 	if peer != nil {
 		d.Peer = &peerDTO{UserID: peer.UserID, DisplayName: peer.DisplayName}
+	}
+	if last != nil {
+		d.LastMessage = lastMessageDTO{ID: last.ID, Seq: last.Seq, SenderID: last.SenderID, Body: last.Body, Deleted: last.Deleted, CreatedAt: last.CreatedAt}
 	}
 	return d
 }

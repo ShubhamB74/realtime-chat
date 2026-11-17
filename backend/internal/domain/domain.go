@@ -84,13 +84,13 @@ type SessionInfo struct {
 }
 
 type CreateLoginParams struct {
-	UserID     string
-	DeviceID   string // optional: reuse an existing device
-	DeviceName string
-	Platform   string
-	TokenHash  []byte
-	TTL        time.Duration
-	MaxDevices int
+	UserID      string
+	DeviceID    string // optional: reuse an existing device
+	DeviceName  string
+	Platform    string
+	TokenHash   []byte
+	TTL         time.Duration
+	MaxDevices  int
 }
 
 type RotateParams struct {
@@ -142,7 +142,8 @@ type ConversationSummary struct {
 	Conversation
 	MemberCount int
 	Role        string
-	Peer        *Peer // set for direct conversations
+	Peer        *Peer           // set for direct conversations
+	LastMessage *MessagePreview // latest message visible to the member, if any
 }
 
 type ListCursor struct {
@@ -152,4 +153,51 @@ type ListCursor struct {
 
 type Settings struct {
 	AIEnabled bool
+}
+
+// Message is a stored message. A deleted message is a tombstone: Body is nil and DeletedAt set.
+type Message struct {
+	ID             string
+	ConversationID string
+	SenderID       *string
+	Seq            int64 // immutable display order within the conversation
+	ModSeq         int64 // bumped on every edit/delete; the sync cursor
+	Body           *string
+	EditedAt       *time.Time
+	DeletedAt      *time.Time
+	CreatedAt      time.Time
+	IdempotencyKey string // set only on results of Send
+}
+
+// MessagePreview is the list-view summary of the latest message.
+type MessagePreview struct {
+	ID        string
+	Seq       int64
+	SenderID  *string
+	Body      *string // truncated; nil when deleted
+	Deleted   bool
+	CreatedAt time.Time
+}
+
+type SendParams struct {
+	ConversationID string
+	UserID         string
+	DeviceID       string
+	IdempotencyKey string
+	Body           string
+}
+
+// MessageResult is the outcome of a message mutation. Recipients are the active members at
+// commit time. Duplicate means nothing changed (an idempotent retry or a no-op delete).
+type MessageResult struct {
+	Message    Message
+	Recipients []string
+	Duplicate  bool
+}
+
+// Changes is one page of a sync response.
+type Changes struct {
+	Messages []Message
+	HasMore  bool
+	LastSeq  int64
 }

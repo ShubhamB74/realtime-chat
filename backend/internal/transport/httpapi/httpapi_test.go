@@ -68,7 +68,7 @@ func TestAuthedRejectsMissingMalformedAndInvalidTokens(t *testing.T) {
 		"missing": "", "wrong scheme": "Basic good", "no token": "Bearer", "bad token": "Bearer nope", "extra parts": "Bearer good extra",
 	} {
 		t.Run(name, func(t *testing.T) {
-			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/me", nil)
+			req := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 			if header != "" {
 				req.Header.Set("Authorization", header)
 			}
@@ -89,11 +89,8 @@ func TestAuthedRejectsMissingMalformedAndInvalidTokens(t *testing.T) {
 func TestAuthedPassesIdentity(t *testing.T) {
 	s := testServer(nil)
 	var got auth.Identity
-	h := s.authed(func(w http.ResponseWriter, _ *http.Request, id auth.Identity) {
-		got = id
-		w.WriteHeader(http.StatusNoContent)
-	})
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/me", nil)
+	h := s.authed(func(w http.ResponseWriter, _ *http.Request, id auth.Identity) { got = id; w.WriteHeader(http.StatusNoContent) })
+	req := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	req.Header.Set("Authorization", "bearer good") // scheme is case-insensitive
 	rec := serve(s, h, req)
 	if rec.Code != http.StatusNoContent || got.UserID != "user-1" || got.SessionID != "sess-1" {
@@ -108,7 +105,7 @@ func TestRateLimitReturns429WithRetryAfter(t *testing.T) {
 	h := s.authed(func(w http.ResponseWriter, _ *http.Request, _ auth.Identity) { w.WriteHeader(http.StatusNoContent) })
 	var last *httptest.ResponseRecorder
 	for i := 0; i < generalUserLimit+1; i++ {
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/me", nil)
+		req := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 		req.Header.Set("Authorization", "Bearer good")
 		last = serve(s, h, req)
 	}
@@ -124,7 +121,7 @@ func TestRateLimitReturns429WithRetryAfter(t *testing.T) {
 func TestRateLimiterFailureFailsOpen(t *testing.T) {
 	s := testServer(failingLimiter{})
 	h := s.authed(func(w http.ResponseWriter, _ *http.Request, _ auth.Identity) { w.WriteHeader(http.StatusNoContent) })
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/me", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	req.Header.Set("Authorization", "Bearer good")
 	if rec := serve(s, h, req); rec.Code != http.StatusNoContent {
 		t.Fatalf("limiter outage must not block requests, got %d", rec.Code)
@@ -132,7 +129,7 @@ func TestRateLimiterFailureFailsOpen(t *testing.T) {
 }
 
 func TestClientIP(t *testing.T) {
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "10.0.0.5:4242"
 	req.Header.Set("X-Forwarded-For", "6.6.6.6, 203.0.113.9")
 	if got := clientIP(req, false); got != "10.0.0.5" {
@@ -158,7 +155,7 @@ func TestEmailKeyIsStableAndHidesEmail(t *testing.T) {
 
 func decode(t *testing.T, body string) error {
 	t.Helper()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	var dst struct {
 		A string `json:"a"`
 	}
@@ -200,7 +197,7 @@ func TestFailMapsErrorKinds(t *testing.T) {
 	}
 	for _, c := range cases {
 		rec := httptest.NewRecorder()
-		s.fail(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil), c.err)
+		s.fail(rec, httptest.NewRequest(http.MethodGet, "/", nil), c.err)
 		b := errBody(t, rec)
 		if rec.Code != c.status || b.Code != c.code {
 			t.Errorf("%v: got %d/%s, want %d/%s", c.err, rec.Code, b.Code, c.status, c.code)
@@ -214,7 +211,7 @@ func TestFailMapsErrorKinds(t *testing.T) {
 func TestNotFoundNeverEchoesDetails(t *testing.T) {
 	s := testServer(nil)
 	rec := httptest.NewRecorder()
-	s.fail(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil), &domain.Error{Kind: domain.ErrNotFound, Msg: "internal detail"})
+	s.fail(rec, httptest.NewRequest(http.MethodGet, "/", nil), &domain.Error{Kind: domain.ErrNotFound, Msg: "internal detail"})
 	if strings.Contains(rec.Body.String(), "internal detail") {
 		t.Error("not_found must use the generic message")
 	}
@@ -264,7 +261,9 @@ func TestEveryRouteIsInOpenAPI(t *testing.T) {
 		t.Fatalf("read openapi: %v", err)
 	}
 	spec := string(raw)
-	for _, r := range testServer(nil).Routes() {
+	srv := testServer(nil)
+	srv.WS = http.NotFoundHandler() // include the WebSocket route in the contract check
+	for _, r := range srv.Routes() {
 		method, path, ok := strings.Cut(r.Pattern, " ")
 		if !ok {
 			t.Fatalf("bad pattern %q", r.Pattern)

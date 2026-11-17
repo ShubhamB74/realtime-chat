@@ -33,3 +33,18 @@ Not covered in Phase 1: Redis integration test, Kafka and object-store connectiv
 | **Acceptance test:** strangers, members, admins and removed members across every conversation endpoint; auth lifecycle; sessions and devices; login rate limit; pagination | end-to-end (real services, real PostgreSQL, in-memory limiter) | `internal/transport/httpapi/api_integration_test.go` |
 
 Not covered: frontend (no Phase 2 UI), load and concurrency beyond the targeted races above, fuzzing, Redis outage behavior end to end.
+
+## Phase 3 test inventory
+| Area | Type | Location |
+|---|---|---|
+| Message validation, normalization, publish-after-persist, no publish on duplicates or failures, limit clamping | unit (fake repo and publisher) | `internal/app/messages` |
+| Gateway over real in-process WebSocket connections: handshake auth (header, subprotocol, query rejected, revoked session), ready event, send/ack/deliver to other members only, idempotent duplicates, non-member send, bad frames and versions, planned events, binary and oversized frames, sync, typing, revocation close (4001), slow consumer (frame and byte bounds), connection limits, graceful shutdown (1001), presence, inbound and sync rate limits, panic containment | unit (fakes) | `internal/transport/ws/hub_test.go` |
+| Token bucket | unit | `internal/transport/ws/bucket_test.go` |
+| Middleware recorder supports hijacking for upgrades | unit | `internal/platform/httpx` |
+| Gapless sequence under 40 concurrent senders; idempotency incl. 8 racing retries; member-only writes (removed members); edit/delete rules and counter accounting; change and history ordering; join-point visibility incl. re-add; last-message preview; session liveness; table constraints | integration (PostgreSQL) | `internal/store/postgres/messages_integration_test.go` |
+| Presence set semantics and expiry | integration (Redis) | `internal/store/redis` |
+| REST lifecycle, join-point rule, conversation summary, **WebSocket end to end** (persisted send, non-member rejected, offline then sync, live edits, typing, presence, oversize) and revoked-session handshake plus live disconnect | end-to-end (real services and PostgreSQL) | `internal/transport/httpapi/messages_integration_test.go` |
+| OpenAPI covers all 29 routes plus the WebSocket route | unit | `internal/transport/httpapi` |
+| **Load baseline (k6): harness only, NOT yet run** | load | `tests/load` |
+
+Not covered: heartbeat/pong timeout; multi-gateway delivery (Phase 4A); behavior with Redis down end to end; browser WebSocket behavior (the dev page `frontend/public/ws-debug.html` is a manual aid, not a test); unit tests of `cmd/loadseed`; fuzzing of the frame parser.

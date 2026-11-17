@@ -17,6 +17,7 @@ import (
 
 	"realtime-chat/backend/internal/app/accounts"
 	"realtime-chat/backend/internal/app/chats"
+	"realtime-chat/backend/internal/app/messages"
 	"realtime-chat/backend/internal/auth"
 	"realtime-chat/backend/internal/domain"
 	"realtime-chat/backend/internal/platform/httpx"
@@ -28,11 +29,21 @@ type TokenVerifier interface {
 	Verify(raw string) (auth.Identity, error)
 }
 
+// PresenceReader tells which users currently have a live connection. Best effort.
+type PresenceReader interface {
+	Online(ctx context.Context, userIDs []string) (map[string]bool, error)
+}
+
 // Deps are the collaborators of the REST API.
 type Deps struct {
 	Accounts *accounts.Service
 	Chats    *chats.Service
-	Tokens   TokenVerifier
+	Messages *messages.Service
+	Presence PresenceReader // nil disables presence (endpoint reports available=false)
+	// WS handles GET /v1/ws (the WebSocket upgrade); it authenticates the handshake itself.
+	// nil leaves the route unregistered.
+	WS     http.Handler
+	Tokens TokenVerifier
 	Limiter  ratelimit.Limiter // nil disables rate limiting (tests only)
 	Logger   *slog.Logger
 	// TrustProxy makes the client IP come from the right-most X-Forwarded-For entry. Enable only
@@ -55,7 +66,7 @@ type Route struct {
 // Routes lists every endpoint. docs/api-specification.md and packages/openapi/openapi.yaml
 // must describe each of them (checked by a contract test).
 func (s *Server) Routes() []Route {
-	return []Route{
+	routes := []Route{
 		{"POST /v1/auth/register", s.register},
 		{"POST /v1/auth/login", s.login},
 		{"POST /v1/auth/refresh", s.refresh},
@@ -81,7 +92,18 @@ func (s *Server) Routes() []Route {
 		{"PUT /v1/conversations/{id}/members/{userId}/role", s.authed(s.setRole)},
 		{"GET /v1/conversations/{id}/settings", s.authed(s.getSettings)},
 		{"PATCH /v1/conversations/{id}/settings", s.authed(s.updateSettings)},
+
+		{"POST /v1/conversations/{id}/messages", s.authed(s.sendMessage)},
+		{"GET /v1/conversations/{id}/messages", s.authed(s.listMessages)},
+		{"PATCH /v1/conversations/{id}/messages/{messageId}", s.authed(s.editMessage)},
+		{"DELETE /v1/conversations/{id}/messages/{messageId}", s.authed(s.deleteMessage)},
+		{"GET /v1/conversations/{id}/changes", s.authed(s.listChanges)},
+		{"GET /v1/conversations/{id}/presence", s.authed(s.conversationPresence)},
 	}
+	if s.WS != nil {
+		routes = append(routes, Route{"GET /v1/ws", s.WS.ServeHTTP})
+	}
+	return routes
 }
 
 // Register mounts all routes on mux.

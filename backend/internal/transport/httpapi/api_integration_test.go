@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,12 +23,50 @@ import (
 
 	"realtime-chat/backend/internal/app/accounts"
 	"realtime-chat/backend/internal/app/chats"
+	"realtime-chat/backend/internal/app/messages"
 	"realtime-chat/backend/internal/auth"
 	"realtime-chat/backend/internal/platform/httpx"
 	"realtime-chat/backend/internal/platform/ratelimit"
 	"realtime-chat/backend/internal/store/postgres"
 	"realtime-chat/backend/internal/transport/httpapi"
+	"realtime-chat/backend/internal/transport/ws"
 )
+
+// memPresence is an in-memory presence store shared by the hub and the REST API in tests.
+type memPresence struct {
+	mu    sync.Mutex
+	conns map[string]map[string]bool
+}
+
+func (m *memPresence) Touch(_ context.Context, user, conn string, _ time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.conns == nil {
+		m.conns = map[string]map[string]bool{}
+	}
+	if m.conns[user] == nil {
+		m.conns[user] = map[string]bool{}
+	}
+	m.conns[user][conn] = true
+	return nil
+}
+
+func (m *memPresence) Remove(_ context.Context, user, conn string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.conns[user], conn)
+	return nil
+}
+
+func (m *memPresence) Online(_ context.Context, users []string) (map[string]bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]bool{}
+	for _, u := range users {
+		out[u] = len(m.conns[u]) > 0
+	}
+	return out, nil
+}
 
 type api struct {
 	t       *testing.T
@@ -59,7 +98,20 @@ func newAPI(t *testing.T) *api {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := httpapi.New(httpapi.Deps{Accounts: acc, Chats: chats.New(store), Tokens: tokens, Limiter: ratelimit.NewMemory(nil), Logger: logger})
+	presence := &memPresence{}
+	wsCfg := ws.DefaultConfig()
+	wsCfg.PingInterval = time.Hour
+	wsCfg.RevalidateInterval = 100 * time.Millisecond // so revocation is observed quickly in tests
+	hub := ws.NewHub(wsCfg, ws.Deps{Sessions: store, Presence: presence, Tokens: tokens, Logger: logger})
+	msgSvc := messages.New(store, hub)
+	hub.Bind(msgSvc)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = hub.Shutdown(ctx)
+	})
+	s := httpapi.New(httpapi.Deps{Accounts: acc, Chats: chats.New(store), Messages: msgSvc, Presence: presence, WS: hub,
+		Tokens: tokens, Limiter: ratelimit.NewMemory(nil), Logger: logger})
 	mux := http.NewServeMux()
 	s.Register(mux)
 	mux.HandleFunc("/", httpx.NotFound)
@@ -256,10 +308,7 @@ func TestUsersCannotAccessConversationsTheyDoNotBelongTo(t *testing.T) {
 
 	// Carol is a stranger: every endpoint answers 404, indistinguishable from a missing id.
 	missing := a.expect(a.do("GET", "/v1/conversations/00000000-0000-0000-0000-00000000dead", carol.Access, nil), 404, "missing conversation")
-	for name, rq := range map[string]struct {
-		m, p string
-		body any
-	}{
+	for name, rq := range map[string]struct{ m, p string; body any }{
 		"get":      {"GET", path, nil},
 		"rename":   {"PATCH", path, map[string]any{"title": "pwned"}},
 		"members":  {"GET", path + "/members", nil},
