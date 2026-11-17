@@ -6,7 +6,7 @@ COMPOSE := docker compose --env-file .env -f infrastructure/docker/docker-compos
 export
 
 .DEFAULT_GOAL := help
-.PHONY: help env bootstrap deps frontend-deps ai-deps \
+.PHONY: load-seed load-baseline help env bootstrap deps frontend-deps ai-deps \
         up up-streaming up-apps down down-volumes ps logs \
         migrate-up migrate-down migrate-status \
         run build test test-integration lint fmt check-health \
@@ -21,7 +21,7 @@ env: ## Create .env with generated secrets (never overwrites)
 
 deps: ## Resolve and record Go dependencies (first run: creates go.sum; commit go.mod/go.sum)
 	cd backend && go get github.com/jackc/pgx/v5 github.com/redis/go-redis/v9 \
-			golang.org/x/crypto github.com/golang-jwt/jwt/v5 \
+			golang.org/x/crypto github.com/golang-jwt/jwt/v5 github.com/coder/websocket \
 		&& go get -tool github.com/pressly/goose/v3/cmd/goose \
 		&& go mod tidy
 
@@ -74,6 +74,15 @@ migrate-down: ## Roll back the most recent migration
 
 migrate-status: ## Show migration status
 	cd backend && go tool goose -dir migrations postgres "$(DATABASE_URL)" status
+
+# ---- load testing (Phase 3 baseline; see tests/load/README.md) -------------------------------
+LOAD_USERS ?= 200
+LOAD_GROUP_SIZE ?= 10
+load-seed: ## Create load-test users, groups and tokens in the dev database -> tests/load/data/seed.json
+	cd backend && go run ./cmd/loadseed -users $(LOAD_USERS) -group-size $(LOAD_GROUP_SIZE) -out ../tests/load/data/seed.json
+
+load-baseline: ## Run the k6 baseline against a running backend (needs k6 and `make load-seed`)
+	k6 run tests/load/k6/chat.js
 
 # ---- backend ---------------------------------------------------------------------------------
 run: ## Run the backend on the host (needs `make up` and `make migrate-up`)

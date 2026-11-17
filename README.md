@@ -29,8 +29,8 @@ React/TypeScript/Vite · Go · Python/FastAPI · PostgreSQL + pgvector · Redis 
 |---|---|---|
 | 0 | Requirements, architecture, repo foundation | Done (rev 2) |
 | 1 | Infra + backend foundation | Done |
-| 2 | Auth + conversations | **Code written, awaiting verification** |
-| 3 | Thin vertical slice: WebSocket, persistence, seq, sync, k6 baseline | Not started |
+| 2 | Auth + conversations | Done |
+| 3 | Thin vertical slice: WebSocket, persistence, seq, sync, k6 baseline | Done |
 | 4A | Fast-path delivery, cross-gateway routing, cursors, receipts, presence | Not started |
 | 4B | Outbox, Kafka, workers, DLQ | Not started |
 | 5 | Notifications, media pipeline, reliability | Not started |
@@ -50,4 +50,4 @@ make run         # then in another shell: make check-health
 Details and environment variables: [docs/deployment.md](docs/deployment.md). Run `make help` for all targets.
 
 ## Key documents
-[PRD](docs/PRD.md) · [HLD](docs/HLD.md) · [LLD](docs/LLD.md) · [Roadmap](docs/roadmap.md) · [API](packages/openapi/openapi.yaml) · [Security](docs/security.md) · [ADRs](docs/adr/)
+[PRD](docs/PRD.md) · [HLD](docs/HLD.md) · [LLD](docs/LLD.md) · [Roadmap](docs/roadmap.md) · [API](packages/openapi/openapi.yaml) · [Security](docs/security.md) · [WebSocket protocol](docs/websocket-protocol.md) · [ADRs](docs/adr/)
