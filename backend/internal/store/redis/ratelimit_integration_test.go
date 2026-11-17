@@ -39,9 +39,19 @@ func TestRedisLimiter(t *testing.T) {
 	if err != nil || ok || retry <= 0 || retry > 2*time.Second {
 		t.Fatalf("4th hit: ok=%v retry=%v err=%v", ok, retry, err)
 	}
-	time.Sleep(2100 * time.Millisecond)
-	if ok, _, err := l.Allow(ctx, "k", 3, 2*time.Second); err != nil || !ok {
-		t.Fatalf("after window: ok=%v err=%v", ok, err)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		ok, _, err := l.Allow(ctx, "k", 3, 2*time.Second)
+		if err != nil {
+			t.Fatalf("after window: %v", err)
+		}
+		if ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("rate limit did not reset within 3 seconds")
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 

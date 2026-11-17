@@ -414,7 +414,7 @@ func TestMessageTableConstraints(t *testing.T) {
 		return err
 	}
 	ok, empty := "text", ""
-	if err := ins(1, 1, "constraint-key-1", &ok, false); err != nil {
+	if err := ins(1, 8, "constraint-key-1", &ok, false); err != nil {
 		t.Fatalf("valid insert: %v", err)
 	}
 	for name, err := range map[string]error{
@@ -431,7 +431,7 @@ func TestMessageTableConstraints(t *testing.T) {
 	if sqlState(ins(1, 7, "constraint-key-8", &ok, false)) != "23505" {
 		t.Error("duplicate (conversation, seq) must violate the unique index")
 	}
-	if sqlState(ins(8, 1, "constraint-key-9", &ok, false)) != "23505" {
+	if sqlState(ins(2, 8, "constraint-key-9", &ok, false)) != "23505" {
 		t.Error("duplicate (conversation, mod_seq) must violate the unique index")
 	}
 	if sqlState(ins(9, 9, "constraint-key-1", &ok, false)) != "23505" {

@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -99,6 +100,9 @@ func (f *fakeMessages) Send(_ context.Context, in messages.SendInput) (messages.
 	if in.ConversationID == boom {
 		panic("handler exploded")
 	}
+	if err := messages.ValidateIdempotencyKey(in.IdempotencyKey); err != nil {
+		return messages.SendOutput{}, err
+	}
 	f.mu.Lock()
 	if !f.isMember(in.ConversationID, in.UserID) {
 		f.mu.Unlock()
@@ -111,7 +115,7 @@ func (f *fakeMessages) Send(_ context.Context, in messages.SendInput) (messages.
 	}
 	seq := int64(len(f.log[in.ConversationID]) + 1)
 	uid, body := in.UserID, in.Body
-	msg := domain.Message{ID: "m" + strings.Repeat("0", 3) + string(rune('a'+seq)), ConversationID: in.ConversationID,
+	msg := domain.Message{ID: fmt.Sprintf("m%04d", seq), ConversationID: in.ConversationID,
 		SenderID: &uid, Seq: seq, ModSeq: seq, Body: &body, CreatedAt: time.Now(), IdempotencyKey: in.IdempotencyKey}
 	f.log[in.ConversationID] = append(f.log[in.ConversationID], msg)
 	f.byKey[key] = msg
@@ -199,8 +203,11 @@ func (e *testEnv) dial(t *testing.T, token string) *websocket.Conn {
 	t.Helper()
 	h := http.Header{}
 	h.Set("Authorization", "Bearer "+token)
-	c, _, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h})
+	c, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h})
 	if err != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 		t.Fatalf("dial %s: %v", token, err)
 	}
 	t.Cleanup(func() { _ = c.CloseNow() })
@@ -291,32 +298,73 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 func TestHandshakeAuthentication(t *testing.T) {
 	e := newEnv(t, nil)
 
-	if _, resp, err := e.dialOpts(t, nil); err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+	// if _, resp, err := e.dialOpts(t, nil); err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+	// 	t.Fatalf("no token: want HTTP 401, got err=%v resp=%v", err, resp)
+	// }
+	_, resp, err := e.dialOpts(t, nil)
+	valid := err != nil && resp != nil && resp.StatusCode == http.StatusUnauthorized
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if !valid {
 		t.Fatalf("no token: want HTTP 401, got err=%v resp=%v", err, resp)
 	}
+	// h := http.Header{"Authorization": {"Bearer nope"}}
+	// if _, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h}); err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+	// 	t.Fatalf("bad token: want HTTP 401, got err=%v resp=%v", err, resp)
+	// }
 	h := http.Header{"Authorization": {"Bearer nope"}}
-	if _, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h}); err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+	_, resp, err = e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h})
+	valid = err != nil && resp != nil && resp.StatusCode == http.StatusUnauthorized
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if !valid {
 		t.Fatalf("bad token: want HTTP 401, got err=%v resp=%v", err, resp)
 	}
 	// A valid token for a revoked session is refused too.
+	// e.sessions.revoke("sc")
+	// h = http.Header{"Authorization": {"Bearer tok-carol"}}
+	// if _, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h}); err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+	// 	t.Fatalf("revoked session: want HTTP 401, got err=%v resp=%v", err, resp)
+	// }
 	e.sessions.revoke("sc")
 	h = http.Header{"Authorization": {"Bearer tok-carol"}}
-	if _, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h}); err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+	_, resp, err = e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h})
+	valid = err != nil && resp != nil && resp.StatusCode == http.StatusUnauthorized
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if !valid {
 		t.Fatalf("revoked session: want HTTP 401, got err=%v resp=%v", err, resp)
 	}
 	// Query-string tokens are not accepted.
+	// c, resp, err := websocket.Dial(context.Background(), e.url()+"?access_token=tok-alice", nil)
+	// if err == nil {
+	// 	_ = c.CloseNow()
+	// 	t.Fatal("query-string token must not authenticate")
+	// }
+	// if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+	// 	t.Errorf("query token: want 401, got %v", resp)
+	// }
 	c, resp, err := websocket.Dial(context.Background(), e.url()+"?access_token=tok-alice", nil)
 	if err == nil {
 		_ = c.CloseNow()
 		t.Fatal("query-string token must not authenticate")
+	}
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
 	}
 	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("query token: want 401, got %v", resp)
 	}
 
 	// Browser style: token as a second offered subprotocol.
-	c2, _, err := e.dialOpts(t, &websocket.DialOptions{Subprotocols: []string{Subprotocol, "bearer.tok-alice"}})
+	c2, resp, err := e.dialOpts(t, &websocket.DialOptions{Subprotocols: []string{Subprotocol, "bearer.tok-alice"}})
 	if err != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 		t.Fatalf("subprotocol auth: %v", err)
 	}
 	defer func() { _ = c2.CloseNow() }()
@@ -331,8 +379,11 @@ func TestHandshakeAuthentication(t *testing.T) {
 func TestReadyEventAnnouncesLimits(t *testing.T) {
 	e := newEnv(t, nil)
 	h := http.Header{"Authorization": {"Bearer tok-alice"}}
-	c, _, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h})
+	c, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h})
 	if err != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 		t.Fatal(err)
 	}
 	defer func() { _ = c.CloseNow() }()
@@ -560,12 +611,25 @@ func TestConnectionLimits(t *testing.T) {
 	_ = e.dial(t, "tok-alice")
 
 	h := http.Header{"Authorization": {"Bearer tok-alice"}}
-	if _, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h}); err == nil || resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+	// if _, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h}); err == nil || resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+	// 	t.Fatalf("per-user limit: want 429, got err=%v resp=%v", err, resp)
+	// }
+	_, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h})
+	valid := err != nil && resp != nil && resp.StatusCode == http.StatusTooManyRequests
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if !valid {
 		t.Fatalf("per-user limit: want 429, got err=%v resp=%v", err, resp)
 	}
 	_ = e.dial(t, "tok-bob") // third connection overall
 	h = http.Header{"Authorization": {"Bearer tok-carol"}}
-	if _, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h}); err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+	_, resp, err = e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h})
+	valid = err != nil && resp != nil && resp.StatusCode == http.StatusServiceUnavailable
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if !valid {
 		t.Fatalf("global limit: want 503, got err=%v resp=%v", err, resp)
 	}
 	if e.hub.Stats().RejectedLimit != 2 {
@@ -575,11 +639,20 @@ func TestConnectionLimits(t *testing.T) {
 	// Slots are released when a connection closes.
 	_ = a1.Close(websocket.StatusNormalClosure, "")
 	waitFor(t, "slot to be released", func() bool {
-		c, _, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer tok-alice"}}})
+		// c, _, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer tok-alice"}}})
+		// if err == nil {
+		// 	_ = c.CloseNow()
+		// }
+		// return err == nil
+		c, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer tok-alice"}}})
 		if err == nil {
 			_ = c.CloseNow()
+			return true
 		}
-		return err == nil
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return false
 	})
 }
 
@@ -603,8 +676,16 @@ func TestGracefulShutdownSaysGoingAway(t *testing.T) {
 		t.Fatalf("shutdown: %v", err)
 	}
 	h := http.Header{"Authorization": {"Bearer tok-bob"}}
-	if _, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h}); err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("after shutdown: want 503, got err=%v resp=%v", err, resp)
+	// if _, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h}); err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+	// 	t.Fatalf("after shutdown: want 503, got err=%v resp=%v", err, resp)
+	// }
+	_, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h})
+	valid := err != nil && resp != nil && resp.StatusCode == http.StatusServiceUnavailable
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if !valid {
+		t.Fatalf("global connection limit: want 503, got err=%v resp=%v", err, resp)
 	}
 }
 
