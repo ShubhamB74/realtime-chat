@@ -48,13 +48,13 @@ var plannedEvents = map[string]string{
 
 // Server event types.
 const (
-	EvReady    = "connection.ready"
-	EvAccepted = "message.accepted"
-	EvReceived = "message.received"
-	EvUpdated  = "message.updated"
-	EvTyping   = "typing.update"
+	EvReady     = "connection.ready"
+	EvAccepted  = "message.accepted"
+	EvReceived  = "message.received"
+	EvUpdated   = "message.updated"
+	EvTyping    = "typing.update"
 	EvSyncBatch = "sync.batch"
-	EvError    = "error"
+	EvError     = "error"
 )
 
 // Envelope wraps every frame in both directions.

@@ -89,7 +89,10 @@ func TestAuthedRejectsMissingMalformedAndInvalidTokens(t *testing.T) {
 func TestAuthedPassesIdentity(t *testing.T) {
 	s := testServer(nil)
 	var got auth.Identity
-	h := s.authed(func(w http.ResponseWriter, _ *http.Request, id auth.Identity) { got = id; w.WriteHeader(http.StatusNoContent) })
+	h := s.authed(func(w http.ResponseWriter, _ *http.Request, id auth.Identity) {
+		got = id
+		w.WriteHeader(http.StatusNoContent)
+	})
 	req := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	req.Header.Set("Authorization", "bearer good") // scheme is case-insensitive
 	rec := serve(s, h, req)

@@ -375,8 +375,8 @@ func TestSendIsAcknowledgedAndDeliveredToOtherMembersOnly(t *testing.T) {
 			t.Errorf("%s: message = %+v", name, msg)
 		}
 	}
-	expectSilence(t, carol, 200*time.Millisecond)  // not a member
-	expectSilence(t, alice, 200*time.Millisecond)  // the origin connection gets only the ack
+	expectSilence(t, carol, 200*time.Millisecond) // not a member
+	expectSilence(t, alice, 200*time.Millisecond) // the origin connection gets only the ack
 }
 
 func TestDuplicateSendIsIdempotentAndNotRebroadcast(t *testing.T) {

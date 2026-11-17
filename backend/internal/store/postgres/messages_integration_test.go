@@ -418,11 +418,11 @@ func TestMessageTableConstraints(t *testing.T) {
 		t.Fatalf("valid insert: %v", err)
 	}
 	for name, err := range map[string]error{
-		"empty body":              ins(2, 2, "constraint-key-2", &empty, false),
+		"empty body":                ins(2, 2, "constraint-key-2", &empty, false),
 		"live message without body": ins(3, 3, "constraint-key-3", nil, false),
-		"tombstone with body":     ins(4, 4, "constraint-key-4", &ok, true),
-		"mod_seq below seq":       ins(5, 4, "constraint-key-5", &ok, false),
-		"short idempotency key":   ins(6, 6, "short", &ok, false),
+		"tombstone with body":       ins(4, 4, "constraint-key-4", &ok, true),
+		"mod_seq below seq":         ins(5, 4, "constraint-key-5", &ok, false),
+		"short idempotency key":     ins(6, 6, "short", &ok, false),
 	} {
 		if sqlState(err) != "23514" {
 			t.Errorf("%s: want check violation 23514, got %v", name, err)

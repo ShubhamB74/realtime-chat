@@ -84,13 +84,13 @@ type SessionInfo struct {
 }
 
 type CreateLoginParams struct {
-	UserID      string
-	DeviceID    string // optional: reuse an existing device
-	DeviceName  string
-	Platform    string
-	TokenHash   []byte
-	TTL         time.Duration
-	MaxDevices  int
+	UserID     string
+	DeviceID   string // optional: reuse an existing device
+	DeviceName string
+	Platform   string
+	TokenHash  []byte
+	TTL        time.Duration
+	MaxDevices int
 }
 
 type RotateParams struct {
