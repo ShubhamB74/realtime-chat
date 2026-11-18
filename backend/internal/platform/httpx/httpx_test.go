@@ -186,27 +186,60 @@ func TestServerGracefulShutdownFinishesInflightRequest(t *testing.T) {
 	}
 }
 
+//	func TestRecorderSupportsHijackForWebSocketUpgrades(t *testing.T) {
+//		var hijacked bool
+//		h := Chain(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+//			conn, _, err := http.NewResponseController(w).Hijack()
+//			if err != nil {
+//				t.Errorf("hijack through middleware failed: %v", err)
+//				return
+//			}
+//			hijacked = true
+//			_ = conn.Close()
+//		}), RequestID, AccessLog(slog.New(slog.NewJSONHandler(io.Discard, nil))), Recover(slog.New(slog.NewJSONHandler(io.Discard, nil))), SecurityHeaders)
+//		srv := httptest.NewServer(h)
+//		defer srv.Close()
+//		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+//		if err != nil {
+//			t.Fatal(err)
+//		}
+//		if resp, err := http.DefaultClient.Do(req); err == nil {
+//			_ = resp.Body.Close()
+//		}
+//		if !hijacked {
+//			t.Fatal("handler was never able to hijack the connection")
+//		}
+//	}
 func TestRecorderSupportsHijackForWebSocketUpgrades(t *testing.T) {
-	var hijacked bool
+	hijacked := make(chan struct{})
+
 	h := Chain(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		conn, _, err := http.NewResponseController(w).Hijack()
 		if err != nil {
 			t.Errorf("hijack through middleware failed: %v", err)
 			return
 		}
-		hijacked = true
+
 		_ = conn.Close()
+		close(hijacked)
 	}), RequestID, AccessLog(slog.New(slog.NewJSONHandler(io.Discard, nil))), Recover(slog.New(slog.NewJSONHandler(io.Discard, nil))), SecurityHeaders)
+
 	srv := httptest.NewServer(h)
 	defer srv.Close()
+
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if resp, err := http.DefaultClient.Do(req); err == nil {
 		_ = resp.Body.Close()
 	}
-	if !hijacked {
+
+	select {
+	case <-hijacked:
+		// Handler successfully hijacked the connection.
+	case <-time.After(2 * time.Second):
 		t.Fatal("handler was never able to hijack the connection")
 	}
 }
