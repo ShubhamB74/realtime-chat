@@ -15,7 +15,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +23,9 @@ import (
 	"realtime-chat/backend/internal/app/accounts"
 	"realtime-chat/backend/internal/app/chats"
 	"realtime-chat/backend/internal/app/messages"
+	"realtime-chat/backend/internal/app/receipts"
 	"realtime-chat/backend/internal/auth"
+	"realtime-chat/backend/internal/platform/gwbus"
 	"realtime-chat/backend/internal/platform/httpx"
 	"realtime-chat/backend/internal/platform/ratelimit"
 	"realtime-chat/backend/internal/store/postgres"
@@ -32,43 +33,11 @@ import (
 	"realtime-chat/backend/internal/transport/ws"
 )
 
-// memPresence is an in-memory presence store shared by the hub and the REST API in tests.
-type memPresence struct {
-	mu    sync.Mutex
-	conns map[string]map[string]bool
-}
-
-func (m *memPresence) Touch(_ context.Context, user, conn string, _ time.Duration) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.conns == nil {
-		m.conns = map[string]map[string]bool{}
-	}
-	if m.conns[user] == nil {
-		m.conns[user] = map[string]bool{}
-	}
-	m.conns[user][conn] = true
-	return nil
-}
-
-func (m *memPresence) Remove(_ context.Context, user, conn string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.conns[user], conn)
-	return nil
-}
-
-func (m *memPresence) Online(_ context.Context, users []string) (map[string]bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := map[string]bool{}
-	for _, u := range users {
-		out[u] = len(m.conns[u]) > 0
-	}
-	return out, nil
-}
-
 type api struct {
+	store  *postgres.Store
+	tokens *auth.TokenIssuer
+	mem    *gwbus.Mem
+	logger *slog.Logger
 	t       *testing.T
 	srv     *httptest.Server
 	pool    *pgxpool.Pool
@@ -98,19 +67,10 @@ func newAPI(t *testing.T) *api {
 	if err != nil {
 		t.Fatal(err)
 	}
-	presence := &memPresence{}
-	wsCfg := ws.DefaultConfig()
-	wsCfg.PingInterval = time.Hour
-	wsCfg.RevalidateInterval = 100 * time.Millisecond // so revocation is observed quickly in tests
-	hub := ws.NewHub(wsCfg, ws.Deps{Sessions: store, Presence: presence, Tokens: tokens, Logger: logger})
-	msgSvc := messages.New(store, hub)
-	hub.Bind(msgSvc)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = hub.Shutdown(ctx)
-	})
-	s := httpapi.New(httpapi.Deps{Accounts: acc, Chats: chats.New(store), Messages: msgSvc, Presence: presence, WS: hub,
+	mem := gwbus.NewMem() // registry + bus shared by every gateway started in this test
+	a0 := &api{t: t, pool: pool, store: store, tokens: tokens, mem: mem, logger: logger}
+	hub, msgSvc, rcpSvc := a0.newGateway("gw-1")
+	s := httpapi.New(httpapi.Deps{Accounts: acc, Chats: chats.New(store), Messages: msgSvc, Receipts: rcpSvc, Presence: mem, WS: hub,
 		Tokens: tokens, Limiter: ratelimit.NewMemory(nil), Logger: logger})
 	mux := http.NewServeMux()
 	s.Register(mux)
@@ -118,7 +78,8 @@ func newAPI(t *testing.T) *api {
 	srv := httptest.NewServer(httpx.Chain(mux, httpx.RequestID, httpx.Recover(logger)))
 	t.Cleanup(srv.Close)
 
-	a := &api{t: t, srv: srv, pool: pool}
+	a := a0
+	a.srv = srv
 	t.Cleanup(func() { // registered before the pool closes, so it runs first
 		ctx := context.Background()
 		_, _ = pool.Exec(ctx, `DELETE FROM conversations WHERE id IN (
@@ -308,10 +269,7 @@ func TestUsersCannotAccessConversationsTheyDoNotBelongTo(t *testing.T) {
 
 	// Carol is a stranger: every endpoint answers 404, indistinguishable from a missing id.
 	missing := a.expect(a.do("GET", "/v1/conversations/00000000-0000-0000-0000-00000000dead", carol.Access, nil), 404, "missing conversation")
-	for name, rq := range map[string]struct {
-		m, p string
-		body any
-	}{
+	for name, rq := range map[string]struct{ m, p string; body any }{
 		"get":      {"GET", path, nil},
 		"rename":   {"PATCH", path, map[string]any{"title": "pwned"}},
 		"members":  {"GET", path + "/members", nil},
@@ -425,4 +383,40 @@ func TestGroupValidation(t *testing.T) {
 	} {
 		a.expect(a.do("POST", "/v1/conversations/groups", alice.Access, body), 400, name)
 	}
+}
+
+// newGateway starts one gateway (hub + message and receipt services) wired to the shared
+// registry and bus. Short intervals make revocation, cursor flushes and presence observable.
+func (a *api) newGateway(id string) (*ws.Hub, *messages.Service, *receipts.Service) {
+	a.t.Helper()
+	cfg := ws.DefaultConfig()
+	cfg.GatewayID = id
+	cfg.PingInterval = time.Hour
+	cfg.RevalidateInterval = 100 * time.Millisecond
+	cfg.FlushInterval = 50 * time.Millisecond
+	cfg.PresenceGrace = 150 * time.Millisecond
+	hub := ws.NewHub(cfg, ws.Deps{Sessions: a.store, Presence: a.mem, Bus: a.mem, Visibility: a.store, Tokens: a.tokens, Logger: a.logger})
+	msgSvc := messages.New(a.store, hub)
+	rcpSvc := receipts.New(a.store, hub)
+	hub.Bind(msgSvc)
+	hub.BindReceipts(rcpSvc)
+	hub.Start()
+	a.t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = hub.Shutdown(ctx)
+	})
+	return hub, msgSvc, rcpSvc
+}
+
+// secondGateway starts another gateway that serves only the WebSocket endpoint and returns its
+// base URL. It shares the database, registry and bus with the main one.
+func (a *api) secondGateway(id string) string {
+	a.t.Helper()
+	hub, _, _ := a.newGateway(id)
+	mux := http.NewServeMux()
+	mux.Handle("GET /v1/ws", hub)
+	srv := httptest.NewServer(mux)
+	a.t.Cleanup(srv.Close)
+	return srv.URL
 }

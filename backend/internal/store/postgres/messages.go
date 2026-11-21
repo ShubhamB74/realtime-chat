@@ -280,10 +280,18 @@ func (s *Store) ListChanges(ctx context.Context, convID, userID string, afterMod
 	if err != nil {
 		return domain.Changes{}, err
 	}
+	// Read the counter FIRST and bound the query by it. Counter values become visible in commit
+	// order, so every change with mod_seq <= LastSeq is already committed and returned (or
+	// reachable via has_more), and any later change has a larger mod_seq. That makes LastSeq a
+	// safe cursor to acknowledge once has_more is false, even with writers running concurrently.
+	var ch domain.Changes
+	if err := s.pool.QueryRow(ctx, `SELECT last_seq FROM conversations WHERE id = $1::uuid`, convID).Scan(&ch.LastSeq); err != nil {
+		return domain.Changes{}, notFoundIfNoRows(err, "conversation counter")
+	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+msgCols+` FROM messages
-		 WHERE conversation_id = $1::uuid AND mod_seq > $2 AND seq > $3
-		 ORDER BY mod_seq ASC LIMIT $4`, convID, afterModSeq, joined, limit+1)
+		 WHERE conversation_id = $1::uuid AND mod_seq > $2 AND mod_seq <= $5 AND seq > $3
+		 ORDER BY mod_seq ASC LIMIT $4`, convID, afterModSeq, joined, limit+1, ch.LastSeq)
 	if err != nil {
 		return domain.Changes{}, fmt.Errorf("list changes: %w", err)
 	}
@@ -291,15 +299,11 @@ func (s *Store) ListChanges(ctx context.Context, convID, userID string, afterMod
 	if err != nil {
 		return domain.Changes{}, err
 	}
-	var ch domain.Changes
 	if len(msgs) > limit {
 		ch.HasMore = true
 		msgs = msgs[:limit]
 	}
 	ch.Messages = msgs
-	if err := s.pool.QueryRow(ctx, `SELECT last_seq FROM conversations WHERE id = $1::uuid`, convID).Scan(&ch.LastSeq); err != nil {
-		return domain.Changes{}, notFoundIfNoRows(err, "conversation counter")
-	}
 	return ch, nil
 }
 

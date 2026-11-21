@@ -28,33 +28,37 @@ const (
 
 // Client event types implemented in this version.
 const (
-	EvMessageSend  = "message.send"
-	EvSyncRequest  = "sync.request"
-	EvTypingStart  = "typing.start"
-	EvTypingStop   = "typing.stop"
-	evBearerPrefix = "bearer."
+	EvMessageSend         = "message.send"
+	EvMessageAck          = "message.ack"
+	EvReadUpdate          = "read.update"
+	EvSyncRequest         = "sync.request"
+	EvTypingStart         = "typing.start"
+	EvTypingStop          = "typing.stop"
+	EvPresenceSubscribe   = "presence.subscribe"
+	EvPresenceUnsubscribe = "presence.unsubscribe"
+	evBearerPrefix        = "bearer."
 )
 
 // Event types specified in the LLD but not implemented yet. They are answered with an
 // unsupported_event error so clients can feature-detect.
 var plannedEvents = map[string]string{
-	"message.ack":        "Phase 4A (delivery cursors)",
-	"read.update":        "Phase 4A (read receipts)",
-	"presence.update":    "Phase 4A (presence subscriptions)",
-	"presence.subscribe": "Phase 4A (presence subscriptions)",
+	"presence.update":    "not planned: presence follows connection liveness",
 	"conversation.join":  "not needed: members receive their conversations' events automatically",
 	"conversation.leave": "not needed: members receive their conversations' events automatically",
 }
 
 // Server event types.
 const (
-	EvReady     = "connection.ready"
-	EvAccepted  = "message.accepted"
-	EvReceived  = "message.received"
-	EvUpdated   = "message.updated"
-	EvTyping    = "typing.update"
-	EvSyncBatch = "sync.batch"
-	EvError     = "error"
+	EvReady            = "connection.ready"
+	EvAccepted         = "message.accepted"
+	EvReceived         = "message.received"
+	EvUpdated          = "message.updated"
+	EvTyping           = "typing.update"
+	EvSyncBatch        = "sync.batch"
+	EvReceipt          = "receipt.updated"
+	EvPresenceSnapshot = "presence.snapshot"
+	EvPresenceChanged  = "presence.changed"
+	EvError            = "error"
 )
 
 // Envelope wraps every frame in both directions.
@@ -80,8 +84,25 @@ type syncItem struct {
 	AfterModSeq    int64  `json:"after_mod_seq"`
 }
 
+// syncPayload: when Conversations is absent or null the server decides which conversations to
+// sync from the device's acknowledged cursors (server-driven sync, ADR-005); an explicit empty
+// list is invalid.
 type syncPayload struct {
-	Conversations []syncItem `json:"conversations"`
+	Conversations *[]syncItem `json:"conversations"`
+}
+
+type ackPayload struct {
+	ConversationID string `json:"conversation_id"`
+	UpToModSeq     int64  `json:"up_to_mod_seq"`
+}
+
+type readPayload struct {
+	ConversationID string `json:"conversation_id"`
+	UpToSeq        int64  `json:"up_to_seq"`
+}
+
+type presenceSubPayload struct {
+	UserIDs []string `json:"user_ids"`
 }
 
 type typingPayload struct {
@@ -117,6 +138,28 @@ type syncBatch struct {
 	HasMore        bool           `json:"has_more"`
 	LastSeq        int64          `json:"last_seq"`
 	Done           bool           `json:"done"` // true on the last batch of a request
+}
+
+type receiptUpdate struct {
+	ConversationID string `json:"conversation_id"`
+	UserID         string `json:"user_id"`
+	DeliveredSeq   int64  `json:"delivered_seq"`
+	ReadSeq        int64  `json:"read_seq"`
+}
+
+type presenceEntry struct {
+	UserID string `json:"user_id"`
+	Online bool   `json:"online"`
+}
+
+type presenceSnapshot struct {
+	Available bool            `json:"available"`
+	Users     []presenceEntry `json:"users"`
+}
+
+type presenceChanged struct {
+	UserID string `json:"user_id"`
+	Online bool   `json:"online"`
 }
 
 type errorPayload struct {

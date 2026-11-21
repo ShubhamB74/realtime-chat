@@ -1,6 +1,6 @@
 # Security
 
-Status: Phase 2 and 3 threat model and controls. Controls are implemented in code and tests but **not yet executed** (see docs/phase-2-acceptance-report.md). No external security review has taken place.
+Status: Phase 2, 3 and 4A threat model and controls. Controls are implemented in code and tests but **not yet executed** (see docs/phase-2-acceptance-report.md). No external security review has taken place.
 
 ## Principles
 Least privilege; server-side authorization on every resource; no hardcoded credentials; no message content, secrets or personal data in logs; AI output is untrusted; fail safely.
@@ -30,6 +30,11 @@ Accounts and credentials; message content (Phase 3+); session tokens; conversati
 | Message duplication or loss on retry | Client idempotency keys enforced by a unique index inside the conversation lock | Keys are per device |
 | Panics taking the gateway down | Recovered per connection goroutine; only the panic type is logged | |
 | Message content in logs | Content is never logged: access log omits bodies and queries; gateway logs ids and counters only | Needs the Phase 9 log audit |
+| Frame injection through the gateway bus | The bus is trusted: whoever can PUBLISH to the Redis channels can push arbitrary frames to users' sockets. **Redis must require authentication (`requirepass`/ACLs), TLS where it crosses a network, and be reachable only from the gateways and the API.** Malformed bus payloads are ignored | A compromised or exposed Redis defeats message integrity for live pushes (not storage). Per-message signing is not implemented |
+| Forged delivery or read cursors | Validated in SQL: active membership, the device must belong to the caller and not be revoked, values only move forward and are capped at the conversation counter; identity comes from the verified token, never from the payload | None known |
+| Presence as a tracking channel | Subscriptions only for users you share an active conversation of at most 50 members with; others silently omitted (no existence leak); 50 subscriptions per connection; no presence in large groups | Anyone you share a small conversation with can see when you are online; there is no "appear offline" setting yet |
+| Read receipts reveal behavior | Read position is shared with the other participant in direct conversations, and via the on-demand seen-by view in groups | Always on; no per-user opt-out yet |
+| Cursor and receipt flooding | Per-connection event rate limit, coalescing buffer capped at 10,000 entries (excess refused with a retryable error), one transaction per flush | Unmeasured |
 | Misconfiguration | Startup validation: secret length, TTL ordering, `sslmode=disable` rejected in production | |
 | SQL injection | All queries are parameterized | |
 

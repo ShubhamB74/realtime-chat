@@ -71,7 +71,9 @@ func (s *Server) listConversations(w http.ResponseWriter, r *http.Request, id au
 	}
 	out := make([]conversationDTO, 0, len(items))
 	for _, it := range items {
-		out = append(out, toConversation(it.Conversation, it.MemberCount, it.Role, it.Peer, it.LastMessage))
+		dto := toConversation(it.Conversation, it.MemberCount, it.Role, it.Peer, it.LastMessage)
+		dto.UnreadCount = it.Unread
+		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"conversations": out, "next_cursor": encodeCursor(next)})
 }

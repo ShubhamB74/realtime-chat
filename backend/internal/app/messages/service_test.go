@@ -27,6 +27,7 @@ type fakeRepo struct {
 	histLim  int
 	chgLim   int
 	histBack int64
+	pendLim  int
 }
 
 func (f *fakeRepo) SendMessage(_ context.Context, p domain.SendParams) (domain.MessageResult, error) {
@@ -42,6 +43,10 @@ func (f *fakeRepo) DeleteMessage(context.Context, string, string, string) (domai
 func (f *fakeRepo) ListHistory(_ context.Context, _, _ string, before int64, limit int) ([]domain.Message, bool, error) {
 	f.histLim, f.histBack = limit, before
 	return nil, false, nil
+}
+func (f *fakeRepo) PendingConversations(_ context.Context, _, _ string, limit int) ([]domain.PendingSync, error) {
+	f.pendLim = limit
+	return []domain.PendingSync{{ConversationID: conv, Cursor: 7}}, nil
 }
 func (f *fakeRepo) ListChanges(_ context.Context, _, _ string, _ int64, limit int) (domain.Changes, error) {
 	f.chgLim = limit
@@ -191,5 +196,16 @@ func TestReadLimitsAreClampedAndValidated(t *testing.T) {
 	}
 	if _, _, err := s.History(ctx, user, "bad", 0, 10); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("bad conversation id: %v", err)
+	}
+}
+
+func TestPendingIsBounded(t *testing.T) {
+	repo := &fakeRepo{}
+	out, err := New(repo, nil).Pending(context.Background(), user, dev, 1000)
+	if err != nil || len(out) != 1 || out[0].Cursor != 7 {
+		t.Fatalf("out=%v err=%v", out, err)
+	}
+	if repo.pendLim != MaxPendingConversations {
+		t.Errorf("limit = %d, want %d", repo.pendLim, MaxPendingConversations)
 	}
 }

@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: Real-Time Chat & Messaging Platform API
-  version: 0.3.0
+  version: 0.4.0
   description: |
-    REST API through Phase 3 (authentication, profiles, devices, sessions, conversations, messages, sync, presence)
+    REST API through Phase 4A (authentication, profiles, devices, sessions, conversations, messages, sync, receipts, presence)
     plus the WebSocket upgrade endpoint.
     Hand-maintained; a unit test checks that every registered route appears here.
     The WebSocket event protocol is specified in docs/websocket-protocol.md.
@@ -22,6 +22,7 @@ tags:
   - name: conversations
   - name: messages
   - name: realtime
+  - name: receipts
 security:
   - bearerAuth: []
 paths:
@@ -453,7 +454,7 @@ paths:
                 properties:
                   changes: { type: array, items: { $ref: '#/components/schemas/Message' } }
                   has_more: { type: boolean }
-                  last_seq: { type: integer, description: The conversation counter; equal to your cursor means you are up to date }
+                  last_seq: { type: integer, description: 'Conversation counter read before the changes were queried. When has_more is false it is a safe cursor to continue from or to acknowledge: every visible change up to it was returned' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -473,6 +474,56 @@ paths:
                 properties:
                   available: { type: boolean }
                   online: { type: array, items: { type: string, format: uuid } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/conversations/{id}/read:
+    post:
+      tags: [receipts]
+      summary: Mark messages as read up to a seq
+      description: |
+        Moves the caller's read cursor forward (never backwards) and caps it at the conversation
+        counter. Applied immediately. The WebSocket `read.update` does the same but is coalesced.
+        In direct conversations the other participant receives `receipt.updated`.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [up_to_seq]
+              properties:
+                up_to_seq: { type: integer, minimum: 0 }
+      responses:
+        '204': { description: Applied }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/conversations/{id}/receipts:
+    get:
+      tags: [receipts]
+      summary: Seen-by - every member's delivered and read position (members only)
+      description: |
+        `delivered_seq` is the highest sync cursor acknowledged by any of the member's live devices;
+        `read_seq` is the member's read cursor. A message with `seq` at or below a cursor counts as
+        delivered or read. Pushed live only for direct conversations (ADR-007, ADR-011).
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  receipts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        user_id: { type: string, format: uuid }
+                        delivered_seq: { type: integer }
+                        read_seq: { type: integer }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
   /v1/ws:
@@ -615,7 +666,7 @@ components:
             body: { type: string, nullable: true, description: 'Truncated to 140 characters; null when deleted' }
             deleted: { type: boolean }
             created_at: { type: string, format: date-time }
-        unread_count: { type: integer, description: Reserved; always 0 until Phase 4A }
+        unread_count: { type: integer, description: 'Messages from others after your read cursor (list responses only), capped at 100; 100 means 100 or more' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     Message:

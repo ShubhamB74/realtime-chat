@@ -84,13 +84,13 @@ type SessionInfo struct {
 }
 
 type CreateLoginParams struct {
-	UserID     string
-	DeviceID   string // optional: reuse an existing device
-	DeviceName string
-	Platform   string
-	TokenHash  []byte
-	TTL        time.Duration
-	MaxDevices int
+	UserID      string
+	DeviceID    string // optional: reuse an existing device
+	DeviceName  string
+	Platform    string
+	TokenHash   []byte
+	TTL         time.Duration
+	MaxDevices  int
 }
 
 type RotateParams struct {
@@ -144,6 +144,7 @@ type ConversationSummary struct {
 	Role        string
 	Peer        *Peer           // set for direct conversations
 	LastMessage *MessagePreview // latest message visible to the member, if any
+	Unread      int             // messages from others after the read cursor, capped at UnreadCap
 }
 
 type ListCursor struct {
@@ -200,4 +201,45 @@ type Changes struct {
 	Messages []Message
 	HasMore  bool
 	LastSeq  int64
+}
+
+// UnreadCap bounds the unread count so counting stays cheap; a value equal to the cap means
+// "this many or more".
+const UnreadCap = 100
+
+// DeviceAck is a delivery acknowledgement: the device has applied every change in the
+// conversation with mod_seq up to UpToModSeq.
+type DeviceAck struct {
+	UserID, DeviceID, ConversationID string
+	UpToModSeq                       int64
+}
+
+// ReadMark moves a member's read cursor (a message seq) forward.
+type ReadMark struct {
+	UserID, ConversationID string
+	UpToSeq                int64
+}
+
+// ReceiptState is a member's current receipt position in a conversation, produced after a
+// cursor update. Delivered is the highest cursor across the member's live devices.
+type ReceiptState struct {
+	ConversationID string
+	UserID         string
+	Delivered      int64
+	Read           int64
+	Direct         bool
+	Others         []string // the other active members (only filled for direct conversations)
+}
+
+// MemberReceipt is one member's receipt position (the "seen by" view).
+type MemberReceipt struct {
+	UserID    string
+	Delivered int64
+	Read      int64
+}
+
+// PendingSync names a conversation that has changes beyond the device's cursor.
+type PendingSync struct {
+	ConversationID string
+	Cursor         int64
 }

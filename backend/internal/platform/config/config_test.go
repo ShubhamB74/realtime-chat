@@ -207,3 +207,26 @@ func TestWebSocketSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewaySettings(t *testing.T) {
+	cfg, err := Load(env(valid()))
+	if err != nil || cfg.GatewayID != "" || cfg.WSFlushInterval != 2*time.Second || cfg.WSPresenceGrace != 8*time.Second || cfg.WSMaxPresenceSubs != 50 {
+		t.Fatalf("defaults: %+v err=%v", cfg, err)
+	}
+	m := valid()
+	m["GATEWAY_ID"] = "gw-2.eu_west"
+	if cfg, err := Load(env(m)); err != nil || cfg.GatewayID != "gw-2.eu_west" {
+		t.Fatalf("valid id: %+v err=%v", cfg.GatewayID, err)
+	}
+	for _, bad := range []string{"has/slash", "has space", strings.Repeat("x", 65)} {
+		m["GATEWAY_ID"] = bad
+		if _, err := Load(env(m)); err == nil {
+			t.Errorf("GATEWAY_ID %q must be rejected", bad)
+		}
+	}
+	m = valid()
+	m["WS_FLUSH_INTERVAL"] = "0s"
+	if _, err := Load(env(m)); err == nil {
+		t.Error("zero flush interval must be rejected")
+	}
+}

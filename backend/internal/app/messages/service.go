@@ -38,6 +38,7 @@ type Repo interface {
 	ListHistory(ctx context.Context, convID, userID string, beforeSeq int64, limit int) ([]domain.Message, bool, error)
 	ListChanges(ctx context.Context, convID, userID string, afterModSeq int64, limit int) (domain.Changes, error)
 	MemberIDs(ctx context.Context, convID, userID string) ([]string, error)
+	PendingConversations(ctx context.Context, userID, deviceID string, limit int) ([]domain.PendingSync, error)
 }
 
 // Event describes a committed change for live delivery.
@@ -218,4 +219,13 @@ func (s *Service) Recipients(ctx context.Context, userID, convID string) ([]stri
 		return nil, err
 	}
 	return s.repo.MemberIDs(ctx, cid, userID)
+}
+
+// MaxPendingConversations bounds one server-driven sync request.
+const MaxPendingConversations = 20
+
+// Pending lists the conversations with changes beyond this device's acknowledged cursors, most
+// recently active first, so a reconnecting device can sync without knowing its own state.
+func (s *Service) Pending(ctx context.Context, userID, deviceID string, limit int) ([]domain.PendingSync, error) {
+	return s.repo.PendingConversations(ctx, userID, deviceID, clamp(limit, MaxPendingConversations, MaxPendingConversations))
 }

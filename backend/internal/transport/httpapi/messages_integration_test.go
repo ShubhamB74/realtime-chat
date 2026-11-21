@@ -57,11 +57,13 @@ type wsc struct {
 	c *websocket.Conn
 }
 
-func (a *api) wsDial(token string) *wsc {
+func (a *api) wsDial(token string) *wsc { return a.wsDialAt(a.srv.URL, token) }
+
+func (a *api) wsDialAt(base, token string) *wsc {
 	a.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	url := "ws" + strings.TrimPrefix(a.srv.URL, "http") + "/v1/ws"
+	url := "ws" + strings.TrimPrefix(base, "http") + "/v1/ws"
 	c, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + token}}})
 	if err != nil {
 		a.t.Fatalf("ws dial: %v", err)

@@ -49,6 +49,10 @@ Defined in `.env.example`; `make env` generates `.env` with random secrets. Chan
 | `ARGON2_MEMORY_KIB`, `ARGON2_TIME`, `ARGON2_THREADS` | backend | no (65536, 3, 2) | password hashing cost; tune per hardware |
 | `ARGON2_MAX_CONCURRENT` | backend | no (CPU count) | concurrent hashes; memory use is this times `ARGON2_MEMORY_KIB` |
 | `TRUST_PROXY_HEADERS` | backend | no (`false`) | `true` only behind exactly one trusted proxy that appends `X-Forwarded-For` |
+| `GATEWAY_ID` | backend | no (generated per process) | unique per replica; 1 to 64 letters, digits, `.`, `-`, `_` (no `/`). Set it explicitly (for example the pod name) so logs and metrics are readable; two replicas with the same id would skip each other's pushes |
+| `WS_FLUSH_INTERVAL` | backend | no (2 s) | how often coalesced ack/read cursors are written |
+| `WS_PRESENCE_GRACE` | backend | no (8 s) | delay before a user is announced offline |
+| `WS_MAX_PRESENCE_SUBS` | backend | no (50) | presence subscriptions per connection |
 | `WS_ALLOWED_ORIGINS` | backend | no (same-origin only) | comma-separated `host[:port]` patterns of browser origins allowed to open WebSockets |
 | `WS_MAX_CONNS`, `WS_MAX_CONNS_PER_USER` | backend | no (5000, 5) | connection caps |
 | `WS_SEND_QUEUE`, `WS_MAX_QUEUE_BYTES` | backend | no (256, 4 MiB) | per-connection outbound queue bounds |
@@ -69,8 +73,15 @@ Defined in `.env.example`; `make env` generates `.env` with random secrets. Chan
 Compose uses version lines for convenience. Before any shared or production use, pin every image by digest. Two images are currently unpinned (`objectstore`, `kafka-ui`) and are marked TODO.
 
 ## WebSocket gateway notes (Phase 3)
-- **Run exactly one backend replica for now.** Live push is in-process; with two replicas, messages pushed from one are not delivered live on the other (clients would only see them after sync). Cross-replica routing arrives in Phase 4A (ADR-006).
+- **Several backend replicas are supported from Phase 4A** through Redis (connection registry and pub/sub, ADR-006, ADR-011). No sticky sessions are needed for the WebSocket: any gateway can serve any user, and live pushes cross gateways. Redis is then part of live delivery latency but not of correctness: if it is down, clients on other gateways catch up by sync. Give each replica a distinct `GATEWAY_ID`.
+- **Redis must be private and authenticated:** it carries frames that are written straight to users' sockets (see docs/security.md).
 - **Reverse proxies** must pass WebSocket upgrades and keep idle connections open longer than the 25 s ping interval. Behind TLS terminate with `wss://`.
 - **Rolling restarts:** the server sends close code 1001 to every client and waits for them (up to `SHUTDOWN_TIMEOUT`). Clients reconnect with exponential backoff and jitter, then sync. A large simultaneous reconnect is not yet load-tested.
 - The Vite dev proxy forwards `/api/v1/ws` (`ws: true`). Open `http://localhost:5173/ws-debug.html` for a manual test page.
 - File descriptor limits: each connection uses one descriptor; raise `ulimit -n` for load tests above a few thousand connections.
+
+## Trying two gateways locally (Phase 4A)
+```
+make up-multi          # backend on :8080 (gw-1) and :8082 (gw-2), plus the frontend
+```
+Log in as two users on the debug page (`/ws-debug.html`), connect one with the default WebSocket base and the other with `127.0.0.1:8082`, and send messages between them. The `gateway stats` log lines (`remote_published_total`, `remote_received_total`, `remote_failed_total`, `remote_dropped_total`) show the cross-gateway traffic. Stop Redis (`docker compose stop redis`) while chatting to see live delivery between gateways pause and sync recover it.

@@ -72,6 +72,18 @@ func (f *fakePresence) Remove(_ context.Context, user, _ string) error {
 	f.mu.Unlock()
 	return nil
 }
+func (f *fakePresence) Gateways(context.Context, []string) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
+func (f *fakePresence) Online(_ context.Context, users []string) (map[string]bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]bool{}
+	for _, u := range users {
+		out[u] = f.touched[u] > f.removed[u]
+	}
+	return out, nil
+}
 func (f *fakePresence) count(m map[string]int, user string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -79,12 +91,28 @@ func (f *fakePresence) count(m map[string]int, user string) int {
 }
 
 // fakeMessages mimics the real service: it stores, then publishes to the hub.
-type fakeMessages struct {
-	hub     *Hub
+// fakeStore is the data behind fakeMessages; several gateways can share one.
+type fakeStore struct {
 	mu      sync.Mutex
 	members map[string][]string
 	log     map[string][]domain.Message
 	byKey   map[string]domain.Message
+	pending []domain.PendingSync
+}
+
+func newFakeStore() *fakeStore {
+	return &fakeStore{members: map[string][]string{conv1: {"ua", "ub"}}, log: map[string][]domain.Message{}, byKey: map[string]domain.Message{}}
+}
+
+type fakeMessages struct {
+	hub *Hub
+	*fakeStore
+}
+
+func (f *fakeMessages) Pending(context.Context, string, string, int) ([]domain.PendingSync, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]domain.PendingSync(nil), f.pending...), nil
 }
 
 func (f *fakeMessages) isMember(conv, user string) bool {
@@ -182,7 +210,7 @@ func newEnv(t *testing.T, mutate func(*Config)) *testEnv {
 		presence: &fakePresence{touched: map[string]int{}, removed: map[string]int{}},
 	}
 	e.hub = NewHub(cfg, Deps{Sessions: e.sessions, Presence: e.presence, Tokens: tokens, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil))})
-	e.msgs = &fakeMessages{hub: e.hub, members: map[string][]string{conv1: {"ua", "ub"}}, log: map[string][]domain.Message{}, byKey: map[string]domain.Message{}}
+	e.msgs = &fakeMessages{hub: e.hub, fakeStore: newFakeStore()}
 	e.hub.Bind(e.msgs)
 	e.srv = httptest.NewServer(e.hub)
 	t.Cleanup(e.srv.Close)
@@ -309,10 +337,6 @@ func TestHandshakeAuthentication(t *testing.T) {
 	if !valid {
 		t.Fatalf("no token: want HTTP 401, got err=%v resp=%v", err, resp)
 	}
-	// h := http.Header{"Authorization": {"Bearer nope"}}
-	// if _, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h}); err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
-	// 	t.Fatalf("bad token: want HTTP 401, got err=%v resp=%v", err, resp)
-	// }
 	h := http.Header{"Authorization": {"Bearer nope"}}
 	_, resp, err = e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h})
 	valid = err != nil && resp != nil && resp.StatusCode == http.StatusUnauthorized
@@ -323,11 +347,6 @@ func TestHandshakeAuthentication(t *testing.T) {
 		t.Fatalf("bad token: want HTTP 401, got err=%v resp=%v", err, resp)
 	}
 	// A valid token for a revoked session is refused too.
-	// e.sessions.revoke("sc")
-	// h = http.Header{"Authorization": {"Bearer tok-carol"}}
-	// if _, resp, err := e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h}); err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
-	// 	t.Fatalf("revoked session: want HTTP 401, got err=%v resp=%v", err, resp)
-	// }
 	e.sessions.revoke("sc")
 	h = http.Header{"Authorization": {"Bearer tok-carol"}}
 	_, resp, err = e.dialOpts(t, &websocket.DialOptions{HTTPHeader: h})
@@ -339,14 +358,6 @@ func TestHandshakeAuthentication(t *testing.T) {
 		t.Fatalf("revoked session: want HTTP 401, got err=%v resp=%v", err, resp)
 	}
 	// Query-string tokens are not accepted.
-	// c, resp, err := websocket.Dial(context.Background(), e.url()+"?access_token=tok-alice", nil)
-	// if err == nil {
-	// 	_ = c.CloseNow()
-	// 	t.Fatal("query-string token must not authenticate")
-	// }
-	// if resp == nil || resp.StatusCode != http.StatusUnauthorized {
-	// 	t.Errorf("query token: want 401, got %v", resp)
-	// }
 	c, resp, err := websocket.Dial(context.Background(), e.url()+"?access_token=tok-alice", nil)
 	if err == nil {
 		_ = c.CloseNow()
@@ -490,12 +501,17 @@ func TestBadFramesGetErrorsButKeepTheConnection(t *testing.T) {
 	if got := errCode(t, readEnv(t, c)); got != "unsupported_event" {
 		t.Errorf("unknown event: %s", got)
 	}
-	write(t, c, event("message.ack", "r3", map[string]any{"conversation_id": conv1, "up_to_seq": 1}))
+	write(t, c, event("presence.update", "r3", map[string]any{"status": "away"}))
 	ev := readEnv(t, c)
 	var p errorPayload
 	payloadOf(t, ev, &p)
-	if p.Code != "unsupported_event" || !strings.Contains(p.Message, "Phase 4A") {
-		t.Errorf("planned event: %+v", p)
+	if p.Code != "unsupported_event" || !strings.Contains(p.Message, "not planned") {
+		t.Errorf("unsupported event: %+v", p)
+	}
+	// Receipts are not wired in this environment: acks answer unsupported_event, not silence.
+	write(t, c, event(EvMessageAck, "r3b", map[string]any{"conversation_id": conv1, "up_to_mod_seq": 1}))
+	if got := errCode(t, readEnv(t, c)); got != "unsupported_event" {
+		t.Errorf("ack without receipts: %s", got)
 	}
 	write(t, c, event(EvMessageSend, "r4", map[string]any{"conversation_id": conv1, "idempotency_key": "key-00000004", "body": "x", "unknown_field": 1}))
 	if got := errCode(t, readEnv(t, c)); got != "invalid_request" {

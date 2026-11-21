@@ -15,6 +15,7 @@ import (
 	"realtime-chat/backend/internal/app/messages"
 	"realtime-chat/backend/internal/auth"
 	"realtime-chat/backend/internal/domain"
+	"realtime-chat/backend/internal/platform/gwbus"
 	"realtime-chat/backend/internal/platform/httpx"
 	"realtime-chat/backend/internal/transport/wire"
 )
@@ -24,6 +25,17 @@ type Messages interface {
 	Send(ctx context.Context, in messages.SendInput) (messages.SendOutput, error)
 	Changes(ctx context.Context, userID, convID string, afterModSeq int64, limit int) (domain.Changes, error)
 	Recipients(ctx context.Context, userID, convID string) ([]string, error)
+	Pending(ctx context.Context, userID, deviceID string, limit int) ([]domain.PendingSync, error)
+}
+
+// Receipts persists coalesced delivery and read cursors (implemented by receipts.Service).
+type Receipts interface {
+	Apply(ctx context.Context, acks []domain.DeviceAck, reads []domain.ReadMark) error
+}
+
+// Visibility authorizes presence subscriptions (implemented by postgres.Store).
+type Visibility interface {
+	VisibleUsers(ctx context.Context, viewerID string, candidates []string, maxGroup int) ([]string, error)
 }
 
 // SessionChecker verifies that a session is still live (handshake and periodic re-check).
@@ -31,20 +43,25 @@ type SessionChecker interface {
 	SessionActive(ctx context.Context, userID, familyID, deviceID string) (bool, error)
 }
 
-// Presence records which users have a live connection. It is best effort: failures are logged
-// and never affect messaging.
-type Presence interface {
-	Touch(ctx context.Context, userID, connID string, ttl time.Duration) error
-	Remove(ctx context.Context, userID, connID string) error
-}
+// Presence is the connection registry and presence store (Redis in production, see ADR-006).
+// It is best effort: failures are logged and never affect messaging.
+type Presence = gwbus.Registry
 
 // TokenVerifier verifies access tokens.
 type TokenVerifier interface {
 	Verify(raw string) (auth.Identity, error)
 }
 
+// Tunables not exposed as configuration.
+const (
+	remoteWorkers    = 4    // goroutines sending to other gateways
+	remoteQueueSize  = 1024 // pending cross-gateway sends; overflow is dropped (sync repairs it)
+	presenceMaxGroup = 50   // presence is not exposed in groups larger than this (ADR-007)
+)
+
 // Config tunes the gateway. See DefaultConfig.
 type Config struct {
+	GatewayID          string // unique per process; generated when empty. Must not contain "/"
 	MaxConns           int
 	MaxConnsPerUser    int
 	SendQueue          int   // bounded outbound queue per connection (frames)
@@ -53,7 +70,10 @@ type Config struct {
 	PongTimeout        time.Duration
 	WriteTimeout       time.Duration
 	RevalidateInterval time.Duration
-	ReadLimit          int64 // max inbound frame size in bytes
+	FlushInterval      time.Duration // how often coalesced ack/read cursors are written
+	PresenceGrace      time.Duration // delay before announcing a user offline (avoids flapping)
+	MaxPresenceSubs    int           // presence subscriptions per connection
+	ReadLimit          int64         // max inbound frame size in bytes
 	EventRate          float64
 	EventBurst         int
 	AllowedOrigins     []string // host patterns for browser clients, e.g. "localhost:5173"
@@ -64,26 +84,34 @@ func DefaultConfig() Config {
 	return Config{
 		MaxConns: 5000, MaxConnsPerUser: 5, SendQueue: 256, MaxQueueBytes: 4 << 20,
 		PingInterval: 25 * time.Second, PongTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second,
-		RevalidateInterval: 60 * time.Second, ReadLimit: 32 << 10, EventRate: 20, EventBurst: 40,
+		RevalidateInterval: 60 * time.Second, FlushInterval: 2 * time.Second, PresenceGrace: 8 * time.Second,
+		MaxPresenceSubs: 50, ReadLimit: 32 << 10, EventRate: 20, EventBurst: 40,
 	}
 }
 
-// Deps are the gateway's collaborators.
+// Deps are the gateway's collaborators. Bus, Visibility and Presence may be nil: the gateway
+// then runs standalone (no cross-gateway delivery, no presence subscriptions).
 type Deps struct {
-	Sessions SessionChecker
-	Presence Presence
-	Tokens   TokenVerifier
-	Logger   *slog.Logger
+	Sessions   SessionChecker
+	Presence   Presence
+	Bus        gwbus.Bus
+	Visibility Visibility
+	Tokens     TokenVerifier
+	Logger     *slog.Logger
 }
 
 // Stats is a snapshot of gateway counters.
 type Stats struct {
-	Connections   int
-	Accepted      int64
-	RejectedLimit int64
-	SlowConsumers int64
-	Published     int64
-	Delivered     int64
+	Connections     int
+	Accepted        int64
+	RejectedLimit   int64
+	SlowConsumers   int64
+	Published       int64
+	Delivered       int64
+	RemotePublished int64 // frames sent to another gateway
+	RemoteReceived  int64 // frames received from another gateway
+	RemoteFailed    int64 // registry or bus errors (live delivery fell back to sync)
+	RemoteDropped   int64 // cross-gateway sends dropped because the local queue was full
 }
 
 var (
@@ -92,40 +120,91 @@ var (
 	errUserLimit = errors.New("too many connections for this user")
 )
 
+type remoteTask struct {
+	users  []string
+	frame  []byte
+	except string
+}
+
 // Hub owns all connections of this gateway process.
 type Hub struct {
-	cfg      Config
-	deps     Deps
-	log      *slog.Logger
-	messages Messages
+	cfg       Config
+	deps      Deps
+	log       *slog.Logger
+	gatewayID string
+	messages  Messages
+	receipts  Receipts
 
 	mu      sync.RWMutex
 	byID    map[string]*conn
 	byUser  map[string]map[string]*conn
-	total   int            // reserved + registered connections
-	perUser map[string]int // same, per user
+	subs    map[string]map[string]*conn // watched user -> connections subscribed to their presence
+	total   int                         // reserved + registered connections
+	perUser map[string]int              // same, per user
 	closing bool
-	wg      sync.WaitGroup
+	wg      sync.WaitGroup // connections
 
-	accepted, rejected, slow, published, delivered atomic.Int64
-	lastWarn                                       atomic.Int64 // unix nanos, throttles repeated warnings
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bgWG     sync.WaitGroup // workers started by Start
+	started  atomic.Bool
+	remoteQ  chan remoteTask
+
+	cursors     cursorBuffer
+	receiptMu   sync.Mutex
+	lastReceipt map[string][2]int64 // "conv/user" -> {delivered, read} last pushed
+
+	accepted, rejected, slow, published, delivered     atomic.Int64
+	remotePublished, remoteReceived, remoteFailed      atomic.Int64
+	remoteDropped                                      atomic.Int64
+	lastWarn                                           atomic.Int64 // unix nanos, throttles repeated warnings
 }
 
-// NewHub builds a gateway. Call Bind before serving.
+// NewHub builds a gateway. Call Bind before serving and Start to enable the background workers.
 func NewHub(cfg Config, d Deps) *Hub {
-	return &Hub{cfg: cfg, deps: d, log: d.Logger, byID: map[string]*conn{}, byUser: map[string]map[string]*conn{}, perUser: map[string]int{}}
+	id := strings.ReplaceAll(cfg.GatewayID, "/", "_")
+	if id == "" {
+		id = "gw-" + newID()[:8]
+	}
+	cfg.GatewayID = id
+	if cfg.FlushInterval <= 0 {
+		cfg.FlushInterval = 2 * time.Second
+	}
+	if cfg.PresenceGrace < 0 {
+		cfg.PresenceGrace = 0
+	}
+	if cfg.MaxPresenceSubs <= 0 {
+		cfg.MaxPresenceSubs = 50
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Hub{
+		cfg: cfg, deps: d, log: d.Logger, gatewayID: id,
+		byID: map[string]*conn{}, byUser: map[string]map[string]*conn{}, subs: map[string]map[string]*conn{},
+		perUser: map[string]int{}, bgCtx: ctx, bgCancel: cancel,
+		remoteQ: make(chan remoteTask, remoteQueueSize), lastReceipt: map[string][2]int64{},
+	}
 }
+
+// GatewayID returns this process's gateway id.
+func (h *Hub) GatewayID() string { return h.gatewayID }
 
 // Bind sets the message service (set after construction because the service publishes to the hub).
 func (h *Hub) Bind(m Messages) { h.messages = m }
+
+// BindReceipts sets the receipts service (it also publishes to the hub).
+func (h *Hub) BindReceipts(r Receipts) { h.receipts = r }
 
 // Stats returns a snapshot of counters.
 func (h *Hub) Stats() Stats {
 	h.mu.RLock()
 	n := len(h.byID)
 	h.mu.RUnlock()
-	return Stats{Connections: n, Accepted: h.accepted.Load(), RejectedLimit: h.rejected.Load(),
-		SlowConsumers: h.slow.Load(), Published: h.published.Load(), Delivered: h.delivered.Load()}
+	return Stats{
+		Connections: n, Accepted: h.accepted.Load(), RejectedLimit: h.rejected.Load(),
+		SlowConsumers: h.slow.Load(), Published: h.published.Load(), Delivered: h.delivered.Load(),
+		RemotePublished: h.remotePublished.Load(), RemoteReceived: h.remoteReceived.Load(),
+		RemoteFailed: h.remoteFailed.Load(), RemoteDropped: h.remoteDropped.Load(),
+	}
 }
 
 // warnThrottled logs a warning at most once every 30 seconds, so a dependency outage does not
@@ -139,7 +218,8 @@ func (h *Hub) warnThrottled(msg string, err error) {
 	h.log.Warn(msg, slog.String("error", err.Error()))
 }
 
-// Publish implements messages.Publisher: best-effort fan-out of a committed change.
+// Publish implements messages.Publisher: best-effort fan-out of a committed change to the
+// members' connections on this gateway and, through the bus, on every other gateway.
 func (h *Hub) Publish(ev messages.Event) {
 	typ := EvReceived
 	if ev.Type == messages.EventUpdated {
@@ -151,11 +231,11 @@ func (h *Hub) Publish(ev messages.Event) {
 		return
 	}
 	h.published.Add(1)
-	h.deliver(ev.Recipients, b, ev.OriginConn)
+	h.fanout(ev.Recipients, b, ev.OriginConn)
 }
 
-// deliver enqueues b on every connection of the given users except exceptConn. It never blocks:
-// a connection whose queue is full is closed as a slow consumer and repairs itself via sync.
+// deliver enqueues b on every LOCAL connection of the given users except exceptConn. It never
+// blocks: a connection whose queue is full is closed as a slow consumer and repairs itself via sync.
 func (h *Hub) deliver(userIDs []string, b []byte, exceptConn string) {
 	h.mu.RLock()
 	var targets []*conn
@@ -223,13 +303,22 @@ func (h *Hub) unregister(c *conn) {
 			delete(h.byUser, c.ident.UserID)
 		}
 	}
+	for watched := range c.watching {
+		if m := h.subs[watched]; m != nil {
+			delete(m, c.id)
+			if len(m) == 0 {
+				delete(h.subs, watched)
+			}
+		}
+	}
 	h.mu.Unlock()
 	h.release(c.ident.UserID)
 	h.wg.Done()
 }
 
-// Shutdown closes every connection with 1001 (going away) and waits for them to finish or for
-// ctx to expire, after which remaining connections are dropped.
+// Shutdown closes every connection with 1001 (going away), waits for them to finish or for ctx
+// to expire (remaining connections are then dropped), stops the background workers and writes
+// any buffered cursors one last time.
 func (h *Hub) Shutdown(ctx context.Context) error {
 	h.mu.Lock()
 	h.closing = true
@@ -242,17 +331,31 @@ func (h *Hub) Shutdown(ctx context.Context) error {
 	for _, c := range conns {
 		c.closeWith(websocket.StatusGoingAway, "server restarting")
 	}
+	var err error
 	done := make(chan struct{})
 	go func() { h.wg.Wait(); close(done) }()
 	select {
 	case <-done:
-		return nil
 	case <-ctx.Done():
 		for _, c := range conns {
 			_ = c.ws.CloseNow()
 		}
-		return ctx.Err()
+		err = ctx.Err()
 	}
+
+	h.bgCancel()
+	bgDone := make(chan struct{})
+	go func() { h.bgWG.Wait(); close(bgDone) }()
+	select {
+	case <-bgDone:
+	case <-ctx.Done():
+	}
+	if h.receipts != nil {
+		fctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		h.flushCursors(fctx)
+		cancel()
+	}
+	return err
 }
 
 // tokenFromRequest reads the access token from the Authorization header or, for browsers, from

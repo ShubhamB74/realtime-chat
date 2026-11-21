@@ -7,11 +7,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 
+	"realtime-chat/backend/internal/platform/gwbus"
 	rstore "realtime-chat/backend/internal/store/redis"
 )
 
@@ -98,5 +100,95 @@ func TestPresenceTouchOnlineRemoveAndExpiry(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if on, _ := p.Online(ctx, []string{"u3"}); on["u3"] {
 		t.Error("expired connection must not count as online")
+	}
+}
+
+func redisClient(t *testing.T) *goredis.Client {
+	t.Helper()
+	url := os.Getenv("REDIS_URL")
+	if url == "" {
+		t.Fatal("REDIS_URL must be set for integration tests")
+	}
+	opts, err := goredis.ParseURL(url)
+	if err != nil {
+		t.Fatal("invalid REDIS_URL")
+	}
+	c := goredis.NewClient(opts)
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+func TestRegistryGatewaysAcrossMultipleGateways(t *testing.T) {
+	p := rstore.NewPresence(redisClient(t), fmt.Sprintf("test-registry:%d:", time.Now().UnixNano()))
+	ctx := context.Background()
+	_ = p.Touch(ctx, "alice", "gw1/c1", 5*time.Second)
+	_ = p.Touch(ctx, "alice", "gw2/c2", 5*time.Second)
+	_ = p.Touch(ctx, "bob", "gw2/c3", 5*time.Second)
+	_ = p.Touch(ctx, "dead", "gw3/c4", 100*time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
+
+	got, err := p.Gateways(ctx, []string{"alice", "bob", "dead", "nobody"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got["gw1"]) != 1 || got["gw1"][0] != "alice" || len(got["gw2"]) != 2 {
+		t.Fatalf("gateways = %v", got)
+	}
+	if _, present := got["gw3"]; present {
+		t.Errorf("an expired connection (crashed gateway) must not be routable: %v", got)
+	}
+}
+
+func TestBusDeliversTargetedAndBroadcastMessages(t *testing.T) {
+	client := redisClient(t)
+	prefix := fmt.Sprintf("test-bus:%d:", time.Now().UnixNano())
+	bus := rstore.NewBus(client, prefix)
+
+	type sink struct {
+		mu   sync.Mutex
+		msgs []gwbus.Message
+	}
+	subscribe := func(gw string) (*sink, context.CancelFunc) {
+		s := &sink{}
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			_ = bus.Subscribe(ctx, gw, func(m gwbus.Message) { s.mu.Lock(); s.msgs = append(s.msgs, m); s.mu.Unlock() })
+		}()
+		return s, cancel
+	}
+	s1, stop1 := subscribe("gw1")
+	defer stop1()
+	s2, stop2 := subscribe("gw2")
+	defer stop2()
+	time.Sleep(300 * time.Millisecond) // let both subscriptions register
+
+	ctx := context.Background()
+	frame := []byte(`{"type":"message.received"}`)
+	if err := bus.Publish(ctx, "gw2", gwbus.Message{Kind: gwbus.KindDeliver, Users: []string{"bob"}, Except: "c9", Frame: frame}); err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.Broadcast(ctx, gwbus.Message{Kind: gwbus.KindPresence, User: "bob", Online: true}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	s1.mu.Lock()
+	defer s1.mu.Unlock()
+	s2.mu.Lock()
+	defer s2.mu.Unlock()
+	if len(s1.msgs) != 1 || s1.msgs[0].Kind != gwbus.KindPresence {
+		t.Errorf("gw1 should only receive the broadcast: %+v", s1.msgs)
+	}
+	if len(s2.msgs) != 2 {
+		t.Fatalf("gw2 should receive the targeted message and the broadcast: %+v", s2.msgs)
+	}
+	var targeted gwbus.Message
+	for _, m := range s2.msgs {
+		if m.Kind == gwbus.KindDeliver {
+			targeted = m
+		}
+	}
+	if string(targeted.Frame) != string(frame) || targeted.Except != "c9" || len(targeted.Users) != 1 {
+		t.Errorf("targeted message corrupted in transit: %+v", targeted)
 	}
 }

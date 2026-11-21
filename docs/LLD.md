@@ -83,7 +83,7 @@ Payloads (draft):
 - `message.send`: `{ conversation_id, idempotency_key, body, attachment_ids }`
 - `message.accepted`: `{ message_id, conversation_id, seq, idempotency_key, created_at }`
 - `message.received`: full message envelope including `seq` and `mod_seq`
-- `message.ack` (client): `{ conversation_id, up_to_seq }` meaning delivered up to this point
+- `message.ack` (client): `{ conversation_id, up_to_mod_seq }` meaning this device has applied every change up to this point (renamed from `up_to_seq` in Phase 4A, because the sync cursor is a `mod_seq`; see ADR-011)
 - `read.update` (client): `{ conversation_id, up_to_seq }`
 - `sync.request`: `{ device_id, page_token? }`, `sync.batch`: `{ changes: [...], next_page_token? }`
 

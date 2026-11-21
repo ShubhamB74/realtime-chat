@@ -6,9 +6,13 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+
+	"realtime-chat/backend/internal/platform/gwbus"
 )
 
-// Presence tracks which users have a live WebSocket connection. Each user has a sorted set of
+// Presence tracks which users have a live WebSocket connection. It also serves as the
+// connection registry (gwbus.Registry): members are "<gatewayID>/<connectionID>", so one
+// structure answers both "is the user online?" and "which gateways hold their connections?". Each user has a sorted set of
 // connection ids scored by expiry time (unix ms), so several devices and several gateway
 // instances work without coordination. Redis is not authoritative: an outage degrades presence
 // only, never messaging (ADR-006, ADR-007).
@@ -65,3 +69,33 @@ func (p *Presence) Online(ctx context.Context, userIDs []string) (map[string]boo
 	}
 	return out, nil
 }
+
+// Gateways maps gateway id -> users (among userIDs) that have an unexpired connection there.
+func (p *Presence) Gateways(ctx context.Context, userIDs []string) (map[string][]string, error) {
+	if len(userIDs) == 0 {
+		return map[string][]string{}, nil
+	}
+	now := fmt.Sprint(time.Now().UnixMilli())
+	pipe := p.client.Pipeline()
+	cmds := make(map[string]*goredis.StringSliceCmd, len(userIDs))
+	for _, u := range userIDs {
+		cmds[u] = pipe.ZRangeByScore(ctx, p.key(u), &goredis.ZRangeBy{Min: now, Max: "+inf"})
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("presence gateways: %w", err)
+	}
+	out := map[string][]string{}
+	for u, c := range cmds {
+		seen := map[string]bool{}
+		for _, member := range c.Val() {
+			gw, ok := gwbus.GatewayOf(member)
+			if ok && !seen[gw] {
+				seen[gw] = true
+				out[gw] = append(out[gw], u)
+			}
+		}
+	}
+	return out, nil
+}
+
+var _ gwbus.Registry = (*Presence)(nil)

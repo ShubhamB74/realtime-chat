@@ -1,6 +1,6 @@
 # ADR-007: Receipts as cursors and scoped presence
 
-Status: Proposed (new)
+Status: Proposed. Implemented in Phase 4A; see ADR-011 for the as-built details (ack semantics, validation, coalescing, who is notified)
 Date: 2026-11-13
 
 ## Decision

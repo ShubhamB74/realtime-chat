@@ -18,6 +18,7 @@ import (
 	"realtime-chat/backend/internal/app/accounts"
 	"realtime-chat/backend/internal/app/chats"
 	"realtime-chat/backend/internal/app/messages"
+	"realtime-chat/backend/internal/app/receipts"
 	"realtime-chat/backend/internal/auth"
 	"realtime-chat/backend/internal/domain"
 	"realtime-chat/backend/internal/platform/httpx"
@@ -39,13 +40,14 @@ type Deps struct {
 	Accounts *accounts.Service
 	Chats    *chats.Service
 	Messages *messages.Service
+	Receipts *receipts.Service
 	Presence PresenceReader // nil disables presence (endpoint reports available=false)
 	// WS handles GET /v1/ws (the WebSocket upgrade); it authenticates the handshake itself.
 	// nil leaves the route unregistered.
-	WS      http.Handler
-	Tokens  TokenVerifier
-	Limiter ratelimit.Limiter // nil disables rate limiting (tests only)
-	Logger  *slog.Logger
+	WS     http.Handler
+	Tokens TokenVerifier
+	Limiter  ratelimit.Limiter // nil disables rate limiting (tests only)
+	Logger   *slog.Logger
 	// TrustProxy makes the client IP come from the right-most X-Forwarded-For entry. Enable only
 	// when exactly one trusted reverse proxy appends that header.
 	TrustProxy bool
@@ -99,6 +101,8 @@ func (s *Server) Routes() []Route {
 		{"DELETE /v1/conversations/{id}/messages/{messageId}", s.authed(s.deleteMessage)},
 		{"GET /v1/conversations/{id}/changes", s.authed(s.listChanges)},
 		{"GET /v1/conversations/{id}/presence", s.authed(s.conversationPresence)},
+		{"POST /v1/conversations/{id}/read", s.authed(s.markRead)},
+		{"GET /v1/conversations/{id}/receipts", s.authed(s.listReceipts)},
 	}
 	if s.WS != nil {
 		routes = append(routes, Route{"GET /v1/ws", s.WS.ServeHTTP})

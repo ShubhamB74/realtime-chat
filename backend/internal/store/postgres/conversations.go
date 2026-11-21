@@ -159,7 +159,12 @@ func (s *Store) ListForUser(ctx context.Context, userID string, after *domain.Li
 		        m.role,
 		        (SELECT count(*) FROM conversation_members x WHERE x.conversation_id = c.id AND x.removed_at IS NULL),
 		        p.peer_id, p.peer_name,
-		        l.id, l.seq, l.sender_id, l.body, l.deleted, l.created_at
+		        l.id, l.seq, l.sender_id, l.body, l.deleted, l.created_at,
+		        (SELECT count(*) FROM (
+		             SELECT 1 FROM messages u
+		             WHERE u.conversation_id = c.id AND u.seq > GREATEST(m.read_seq, m.joined_seq)
+		               AND u.deleted_at IS NULL AND u.sender_id IS DISTINCT FROM m.user_id
+		             LIMIT `+fmt.Sprint(domain.UnreadCap)+`) q) AS unread
 		 FROM conversation_members m
 		 JOIN conversations c ON c.id = m.conversation_id
 		 LEFT JOIN LATERAL (
@@ -197,7 +202,7 @@ func (s *Store) ListForUser(ctx context.Context, userID string, after *domain.Li
 		)
 		if err := rows.Scan(&cs.ID, &cs.Type, &cs.Title, &cs.CreatedBy, &cs.LastSeq, &cs.CreatedAt, &cs.UpdatedAt,
 			&cs.Role, &cs.MemberCount, &peerID, &peerName,
-			&lmID, &lmSeq, &lmSender, &lmBody, &lmDel, &lmAt); err != nil {
+			&lmID, &lmSeq, &lmSender, &lmBody, &lmDel, &lmAt, &cs.Unread); err != nil {
 			return nil, nil, fmt.Errorf("scan conversation: %w", err)
 		}
 		if peerID != nil && peerName != nil {

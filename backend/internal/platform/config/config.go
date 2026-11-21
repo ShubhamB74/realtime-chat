@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,10 @@ type Config struct {
 	TrustProxyHeaders  bool
 
 	// WebSocket gateway (docs/websocket-protocol.md). Defaults are unmeasured.
+	GatewayID            string
+	WSFlushInterval      time.Duration
+	WSPresenceGrace      time.Duration
+	WSMaxPresenceSubs    int
 	WSAllowedOrigins     []string
 	WSMaxConns           int
 	WSMaxConnsPerUser    int
@@ -99,13 +104,17 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	cfg := Config{
-		Env:                  str("APP_ENV", "development"),
-		HTTPAddr:             str("HTTP_ADDR", ":8080"),
-		LogLevel:             str("LOG_LEVEL", "info"),
-		LogFormat:            str("LOG_FORMAT", "json"),
-		DatabaseURL:          strings.TrimSpace(getenv("DATABASE_URL")),
-		RedisURL:             strings.TrimSpace(getenv("REDIS_URL")),
-		ObjectStoreAddr:      strings.TrimSpace(getenv("OBJECT_STORE_ADDR")),
+		Env:               str("APP_ENV", "development"),
+		HTTPAddr:          str("HTTP_ADDR", ":8080"),
+		LogLevel:          str("LOG_LEVEL", "info"),
+		LogFormat:         str("LOG_FORMAT", "json"),
+		DatabaseURL:       strings.TrimSpace(getenv("DATABASE_URL")),
+		RedisURL:          strings.TrimSpace(getenv("REDIS_URL")),
+		ObjectStoreAddr:   strings.TrimSpace(getenv("OBJECT_STORE_ADDR")),
+		GatewayID:            strings.TrimSpace(getenv("GATEWAY_ID")),
+		WSFlushInterval:      dur("WS_FLUSH_INTERVAL", 2*time.Second),
+		WSPresenceGrace:      dur("WS_PRESENCE_GRACE", 8*time.Second),
+		WSMaxPresenceSubs:    int(num("WS_MAX_PRESENCE_SUBS", 50, 1, 1000)),
 		WSMaxConns:           int(num("WS_MAX_CONNS", 5000, 1, 1_000_000)),
 		WSMaxConnsPerUser:    int(num("WS_MAX_CONNS_PER_USER", 5, 1, 100)),
 		WSSendQueue:          int(num("WS_SEND_QUEUE", 256, 1, 100_000)),
@@ -117,23 +126,23 @@ func Load(getenv func(string) string) (Config, error) {
 		WSReadLimitBytes:     num("WS_READ_LIMIT_BYTES", 32768, 1024, 1<<20),
 		WSEventRate:          int(num("WS_EVENT_RATE", 20, 1, 10_000)),
 		WSEventBurst:         int(num("WS_EVENT_BURST", 40, 1, 10_000)),
-		JWTSecret:            strings.TrimSpace(getenv("AUTH_JWT_SECRET")),
-		AuthIssuer:           str("AUTH_ISSUER", "realtime-chat"),
-		AccessTokenTTL:       dur("AUTH_ACCESS_TTL", 15*time.Minute),
-		RefreshTokenTTL:      dur("AUTH_REFRESH_TTL", 30*24*time.Hour),
-		SessionMaxLifetime:   dur("AUTH_SESSION_MAX_LIFETIME", 90*24*time.Hour),
-		MaxDevices:           int(num("AUTH_MAX_DEVICES", 20, 1, 100)),
-		Argon2MemoryKiB:      uint32(num("ARGON2_MEMORY_KIB", 64*1024, 8, 1<<20)), //nolint:gosec // range-checked above
-		Argon2Time:           uint32(num("ARGON2_TIME", 3, 1, 10)),                //nolint:gosec // range-checked above
-		Argon2Threads:        uint8(num("ARGON2_THREADS", 2, 1, 16)),              //nolint:gosec // range-checked above
-		HashConcurrency:      int(num("ARGON2_MAX_CONCURRENT", 0, 0, 64)),
-		TrustProxyHeaders:    boolEnv(getenv("TRUST_PROXY_HEADERS"), &errs),
-		ShutdownTimeout:      dur("SHUTDOWN_TIMEOUT", 20*time.Second),
-		ReadinessTimeout:     dur("READINESS_TIMEOUT", 2*time.Second),
-		ReadHeaderTimeout:    dur("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
-		ReadTimeout:          dur("HTTP_READ_TIMEOUT", 15*time.Second),
-		WriteTimeout:         dur("HTTP_WRITE_TIMEOUT", 30*time.Second),
-		IdleTimeout:          dur("HTTP_IDLE_TIMEOUT", 60*time.Second),
+		JWTSecret:          strings.TrimSpace(getenv("AUTH_JWT_SECRET")),
+		AuthIssuer:         str("AUTH_ISSUER", "realtime-chat"),
+		AccessTokenTTL:     dur("AUTH_ACCESS_TTL", 15*time.Minute),
+		RefreshTokenTTL:    dur("AUTH_REFRESH_TTL", 30*24*time.Hour),
+		SessionMaxLifetime: dur("AUTH_SESSION_MAX_LIFETIME", 90*24*time.Hour),
+		MaxDevices:         int(num("AUTH_MAX_DEVICES", 20, 1, 100)),
+		Argon2MemoryKiB:    uint32(num("ARGON2_MEMORY_KIB", 64*1024, 8, 1<<20)),   //nolint:gosec // range-checked above
+		Argon2Time:         uint32(num("ARGON2_TIME", 3, 1, 10)),                   //nolint:gosec // range-checked above
+		Argon2Threads:      uint8(num("ARGON2_THREADS", 2, 1, 16)),                 //nolint:gosec // range-checked above
+		HashConcurrency:    int(num("ARGON2_MAX_CONCURRENT", 0, 0, 64)),
+		TrustProxyHeaders:  boolEnv(getenv("TRUST_PROXY_HEADERS"), &errs),
+		ShutdownTimeout:   dur("SHUTDOWN_TIMEOUT", 20*time.Second),
+		ReadinessTimeout:  dur("READINESS_TIMEOUT", 2*time.Second),
+		ReadHeaderTimeout: dur("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+		ReadTimeout:       dur("HTTP_READ_TIMEOUT", 15*time.Second),
+		WriteTimeout:      dur("HTTP_WRITE_TIMEOUT", 30*time.Second),
+		IdleTimeout:       dur("HTTP_IDLE_TIMEOUT", 60*time.Second),
 	}
 
 	switch cfg.Env {
@@ -170,6 +179,9 @@ func Load(getenv func(string) string) (Config, error) {
 
 	if len(cfg.JWTSecret) < 32 {
 		errs = append(errs, errors.New("AUTH_JWT_SECRET: required, at least 32 characters (run `make env` to generate one)"))
+	}
+	if cfg.GatewayID != "" && !gatewayIDRe.MatchString(cfg.GatewayID) {
+		errs = append(errs, errors.New("GATEWAY_ID: 1 to 64 characters of letters, digits, dot, dash or underscore"))
 	}
 	if cfg.WSPongTimeout >= cfg.WSPingInterval {
 		errs = append(errs, errors.New("WS_PONG_TIMEOUT: must be shorter than WS_PING_INTERVAL"))
@@ -217,6 +229,8 @@ func (c Config) LogValue() slog.Value {
 		slog.Duration("shutdown_timeout", c.ShutdownTimeout),
 	)
 }
+
+var gatewayIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 func boolEnv(raw string, errs *[]error) bool {
 	raw = strings.TrimSpace(raw)

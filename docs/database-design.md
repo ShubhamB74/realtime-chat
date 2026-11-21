@@ -42,3 +42,16 @@ Migrations use goose (`-- +goose Up/Down`), run via `make migrate-up`. Requires 
 **Query patterns:** history `WHERE conversation_id AND seq > joined_seq AND seq < before ORDER BY seq DESC` (unique `(conversation_id, seq)` index); sync `WHERE conversation_id AND mod_seq > cursor AND seq > joined_seq ORDER BY mod_seq` (unique `(conversation_id, mod_seq)` index); last-message preview via a lateral subquery on the newest `seq`. Indexes are derived from these patterns, **not yet validated with `EXPLAIN` on realistic data**.
 
 **Known gaps:** no outbox table yet (Phase 4B); edits overwrite the body with no history; no full-text index (Phase 6); no partitioning or archival (Phase 8); `sender_device_id` is set null when a device row is deleted, which weakens idempotency for that device only.
+
+## Phase 4A schema (migration 00009) and query changes
+**device_cursors**: PK `(device_id, conversation_id)`, `acked_mod_seq` (the highest sync cursor the device acknowledged), `updated_at`; cascade on device or conversation deletion; index on `conversation_id` for per-conversation aggregates. Written only by the gateway's coalesced flush; every write is validated in the statement itself (active member, caller's non-revoked device, capped at `conversations.last_seq`, `GREATEST` so it never moves backwards).
+
+**Derived receipt state:** *delivered* for a user in a conversation is `max(acked_mod_seq)` over their non-revoked devices; *read* is `conversation_members.read_seq`. A message is delivered/read when its `seq` is at or below the cursor. No per-message receipt rows exist.
+
+**Unread count** (conversation list): a bounded subquery counting up to 100 messages with `seq > max(read_seq, joined_seq)`, not deleted, `sender_id IS DISTINCT FROM` the member. Served by `(conversation_id, seq)`; cost grows with the member's own messages since their read cursor (unmeasured).
+
+**Server-driven sync query:** conversations where `last_seq > GREATEST(device cursor, joined_seq)`, ordered by `updated_at` (one indexed join, limit 20).
+
+**`ListChanges` bound:** reads `conversations.last_seq` first and adds `mod_seq <= last_seq`, which is what makes `last_seq` a safe cursor under concurrent writers.
+
+**Known gaps:** no purge of cursor rows for long-inactive devices; the `updated_at` ordering used by server-driven sync is not indexed; no partitioning.

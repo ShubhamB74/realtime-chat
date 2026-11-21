@@ -1,6 +1,6 @@
 # ADR-006: Gateway routing mechanism
 
-Status: Proposed (new)
+Status: Proposed. Implemented in Phase 4A with the refinements recorded in ADR-011 (registry shares the presence structure; broadcast channel for presence; instant session disconnect over the bus was not built)
 Date: 2026-11-13
 
 ## Decision

@@ -24,14 +24,16 @@
   <button id="history">Load history</button> <button id="presence">Who is online?</button>
 </fieldset>
 <fieldset><legend>3. Socket</legend>
+  <input id="wsbase" placeholder="WebSocket base (blank = this page's /api, e.g. 127.0.0.1:8082 for gateway 2)" size="52">
   <button id="connect">Connect</button> <button id="disconnect">Disconnect</button>
+  <button id="read">Mark read</button> <button id="watch">Watch presence</button>
   <input id="text" placeholder="message" size="40"> <button id="send">Send</button> <button id="typing">Typing</button>
 </fieldset>
 <div id="log"></div>
 <script>
 const API = '/api'; // proxied to the backend by vite.config.ts
 const $ = (id) => document.getElementById(id);
-const state = { access: null, refresh: null, deviceId: localStorage.getItem('dbg_device') || null, ws: null, cursors: {} };
+const state = { access: null, refresh: null, deviceId: localStorage.getItem('dbg_device') || null, ws: null, cursors: {}, lastSeq: {}, ackTimers: {} };
 const log = (...a) => { const l = $('log'); l.textContent += a.map((x) => typeof x === 'string' ? x : JSON.stringify(x)).join(' ') + '\n'; l.scrollTop = l.scrollHeight; };
 
 async function api(method, path, body) {
@@ -63,8 +65,18 @@ $('presence').onclick = async () => { try { log('presence', await api('GET', `/v
 // The reducer is idempotent: duplicates and replays (fast path + sync) are harmless.
 function applyMessage(m) {
   const cur = state.cursors[m.conversation_id] || 0;
-  if (m.mod_seq > cur) state.cursors[m.conversation_id] = m.mod_seq;
+  if (m.mod_seq > cur) { state.cursors[m.conversation_id] = m.mod_seq; scheduleAck(m.conversation_id); }
+  if (m.seq > (state.lastSeq[m.conversation_id] || 0)) state.lastSeq[m.conversation_id] = m.seq;
   log(`msg ${m.conversation_id.slice(0, 8)} seq=${m.seq} mod=${m.mod_seq} ${m.deleted_at ? '[deleted]' : JSON.stringify(m.body)}`);
+}
+
+// Tell the server how far this device has applied (coalesced; the server stores it and uses it for
+// server-driven sync and delivery receipts). Only call this after the changes were really applied.
+function scheduleAck(conv) {
+  clearTimeout(state.ackTimers[conv]);
+  state.ackTimers[conv] = setTimeout(() => {
+    if (state.ws && state.ws.readyState === 1) send('message.ack', { conversation_id: conv, up_to_mod_seq: state.cursors[conv] });
+  }, 300);
 }
 
 function send(type, payload, requestId) { state.ws.send(JSON.stringify({ v: 1, type, request_id: requestId || ('dbg-' + Date.now()), payload })); }
@@ -72,16 +84,26 @@ function send(type, payload, requestId) { state.ws.send(JSON.stringify({ v: 1, t
 $('connect').onclick = () => {
   if (!state.access) return log('log in first');
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const base = $('wsbase').value.trim() || `${location.host}${API}`;
   // Browsers cannot set headers on a WebSocket: offer the token as a second subprotocol.
-  state.ws = new WebSocket(`${proto}://${location.host}${API}/v1/ws`, ['rtc.v1', 'bearer.' + state.access]);
-  state.ws.onopen = () => { log('socket open'); const known = Object.entries(state.cursors).slice(0, 20); if (known.length) send('sync.request', { conversations: known.map(([conversation_id, after_mod_seq]) => ({ conversation_id, after_mod_seq })) }, 'resync'); };
+  state.ws = new WebSocket(`${proto}://${base}/v1/ws`, ['rtc.v1', 'bearer.' + state.access]);
+  // On every (re)connect ask the server what changed for this device (no conversation list).
+  state.ws.onopen = () => { log('socket open'); send('sync.request', undefined, 'resync'); };
   state.ws.onclose = (e) => log('socket closed', e.code, e.reason);
   state.ws.onerror = () => log('socket error');
   state.ws.onmessage = (e) => {
     const ev = JSON.parse(e.data);
     if (ev.type === 'message.received' || ev.type === 'message.updated') applyMessage(ev.payload);
     else if (ev.type === 'message.accepted') { applyMessage(ev.payload.message); log('  accepted', ev.request_id, ev.payload.duplicate ? '(duplicate)' : ''); }
-    else if (ev.type === 'sync.batch') { ev.payload.changes.forEach(applyMessage); log('  sync', ev.payload.status, 'has_more=' + ev.payload.has_more); }
+    else if (ev.type === 'sync.batch') {
+      ev.payload.changes.forEach(applyMessage);
+      log('  sync', ev.payload.conversation_id.slice(0, 8) || '(nothing pending)', ev.payload.status, 'has_more=' + ev.payload.has_more);
+      // A complete batch means every visible change up to last_seq was applied: that is a safe cursor.
+      if (!ev.payload.has_more && ev.payload.conversation_id && ev.payload.last_seq > (state.cursors[ev.payload.conversation_id] || 0)) {
+        state.cursors[ev.payload.conversation_id] = ev.payload.last_seq; scheduleAck(ev.payload.conversation_id);
+      }
+      if (ev.payload.has_more) setTimeout(() => send('sync.request', { conversations: [{ conversation_id: ev.payload.conversation_id, after_mod_seq: state.cursors[ev.payload.conversation_id] || 0 }] }), 1100);
+    }
     else log(ev.type, ev.payload);
   };
 };
@@ -91,6 +113,11 @@ $('send').onclick = () => {
   const key = 'dbg-' + crypto.randomUUID();
   send('message.send', { conversation_id: $('conv').value, idempotency_key: key, body: $('text').value }, key);
   $('text').value = '';
+};
+$('read').onclick = () => { const c = $('conv').value; if (state.ws && state.ws.readyState === 1) send('read.update', { conversation_id: c, up_to_seq: state.lastSeq[c] || 0 }); };
+$('watch').onclick = async () => {
+  try { const r = await api('GET', `/v1/conversations/${$('conv').value}/members`); const me = (await api('GET', '/v1/me')).user.id;
+    send('presence.subscribe', { user_ids: r.members.map((m) => m.user_id).filter((id) => id !== me).slice(0, 50) }); } catch (e) { log('ERR', e.message); }
 };
 $('typing').onclick = () => state.ws && state.ws.readyState === 1 && send('typing.start', { conversation_id: $('conv').value });
 </script>

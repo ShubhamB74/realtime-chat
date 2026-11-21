@@ -18,6 +18,7 @@ import (
 	"realtime-chat/backend/internal/app/accounts"
 	"realtime-chat/backend/internal/app/chats"
 	"realtime-chat/backend/internal/app/messages"
+	"realtime-chat/backend/internal/app/receipts"
 	"realtime-chat/backend/internal/auth"
 	"realtime-chat/backend/internal/platform/config"
 	"realtime-chat/backend/internal/platform/health"
@@ -103,16 +104,24 @@ func run() int {
 		logger.Error("accounts service failed to start", slog.String("error", err.Error()))
 		return 1
 	}
-	presence := redisstore.NewPresence(rdb, "presence:")
-	hub := ws.NewHub(wsConfig(cfg), ws.Deps{Sessions: store, Presence: presence, Tokens: tokens, Logger: logger})
+	presence := redisstore.NewPresence(rdb, "presence:") // presence store and connection registry
+	bus := redisstore.NewBus(rdb, "bus:")                 // gateway-to-gateway pub/sub
+	hub := ws.NewHub(wsConfig(cfg), ws.Deps{
+		Sessions: store, Presence: presence, Bus: bus, Visibility: store, Tokens: tokens, Logger: logger,
+	})
 	messageSvc := messages.New(store, hub) // the hub is the best-effort live-delivery publisher
+	receiptSvc := receipts.New(store, hub)
 	hub.Bind(messageSvc)
+	hub.BindReceipts(receiptSvc)
+	hub.Start()
+	logger.Info("gateway started", slog.String("gateway_id", hub.GatewayID()))
 	go logGatewayStats(ctx, hub, logger)
 
 	httpapi.New(httpapi.Deps{
 		Accounts:   accountsSvc,
 		Chats:      chats.New(store),
 		Messages:   messageSvc,
+		Receipts:   receiptSvc,
 		Presence:   presence,
 		WS:         hub,
 		Tokens:     tokens,
@@ -174,6 +183,7 @@ func run() int {
 
 func wsConfig(c config.Config) ws.Config {
 	return ws.Config{
+		GatewayID: c.GatewayID, FlushInterval: c.WSFlushInterval, PresenceGrace: c.WSPresenceGrace, MaxPresenceSubs: c.WSMaxPresenceSubs,
 		MaxConns: c.WSMaxConns, MaxConnsPerUser: c.WSMaxConnsPerUser, SendQueue: c.WSSendQueue, MaxQueueBytes: c.WSMaxQueueBytes,
 		PingInterval: c.WSPingInterval, PongTimeout: c.WSPongTimeout, WriteTimeout: c.WSWriteTimeout,
 		RevalidateInterval: c.WSRevalidateInterval, ReadLimit: c.WSReadLimitBytes,
@@ -194,7 +204,9 @@ func logGatewayStats(ctx context.Context, hub *ws.Hub, logger *slog.Logger) {
 			logger.Info("gateway stats",
 				slog.Int("connections", s.Connections), slog.Int64("accepted_total", s.Accepted),
 				slog.Int64("rejected_limit_total", s.RejectedLimit), slog.Int64("slow_consumers_total", s.SlowConsumers),
-				slog.Int64("published_total", s.Published), slog.Int64("delivered_total", s.Delivered))
+				slog.Int64("published_total", s.Published), slog.Int64("delivered_total", s.Delivered),
+				slog.Int64("remote_published_total", s.RemotePublished), slog.Int64("remote_received_total", s.RemoteReceived),
+				slog.Int64("remote_failed_total", s.RemoteFailed), slog.Int64("remote_dropped_total", s.RemoteDropped))
 		}
 	}
 }

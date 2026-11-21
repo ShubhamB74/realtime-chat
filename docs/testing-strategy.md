@@ -48,3 +48,21 @@ Not covered: frontend (no Phase 2 UI), load and concurrency beyond the targeted 
 | **Load baseline (k6): harness only, NOT yet run** | load | `tests/load` |
 
 Not covered: heartbeat/pong timeout; multi-gateway delivery (Phase 4A); behavior with Redis down end to end; browser WebSocket behavior (the dev page `frontend/public/ws-debug.html` is a manual aid, not a test); unit tests of `cmd/loadseed`; fuzzing of the frame parser.
+
+## Phase 4A test inventory
+| Area | Type | Location |
+|---|---|---|
+| In-memory bus and registry (targeted vs broadcast delivery, expiry, failure injection) | unit | `internal/platform/gwbus` |
+| **Several gateways in one process sharing a bus and registry:** a message crosses gateways, exactly one copy per connection, non-members get nothing; updates and typing cross; **registry/bus outage: sending and local delivery continue, remote failures are counted, and the missed client recovers by sync**; subscription recovery after an outage | unit (fakes) | `internal/transport/ws/cluster_test.go` |
+| Presence subscriptions across gateways (snapshot, online, offline after grace, unsubscribe, reconnect inside the grace period, authorization filter, cap, validation) | unit (fakes) | same |
+| Ack and read coalescing, identity attribution, validation, flush on shutdown; receipt routing and de-duplication (direct vs group) | unit (fakes) | same |
+| Server-driven sync (nothing pending; pending with cursor) | unit (fakes) | same |
+| Receipts service (batch publish, empty batch, validation, stranger rejected, seen-by) | unit | `internal/app/receipts` |
+| Pending-sync limit | unit | `internal/app/messages` |
+| Registry `Gateways` incl. expired entries; bus targeted and broadcast over **real Redis** | integration (Redis) | `internal/store/redis` |
+| Cursors monotonic, capped, validated (strangers, foreign and revoked devices); group state; unread counts and cap; seen-by; pending conversations (cursor semantics, other device, late joiner, removal); presence visibility rules; **`last_seq` safe cursor under concurrent writers** | integration (PostgreSQL) | `internal/store/postgres/receipts_integration_test.go` |
+| **Two gateways with one database:** messages, replies and live edits cross; a registry/bus outage loses nothing (server-driven sync recovers); receipts and unread counts end to end (WS acks, WS and REST read marks, seen-by, strangers); server-driven sync across a reconnect; presence subscriptions across gateways | end-to-end (real services and PostgreSQL, in-memory bus) | `internal/transport/httpapi/cluster_integration_test.go` |
+| Config: gateway id, flush interval, grace | unit | `internal/platform/config` |
+| OpenAPI covers all 31 routes plus the WebSocket route | unit | `internal/transport/httpapi` |
+
+Not covered: the Redis-backed bus and registry together with the real gateway under load (the end-to-end tests use the in-memory bus; Redis is tested separately at the adapter level); two real processes; Redis failover; `GATEWAY_ID` collisions; messages arriving out of order from another gateway; client reducer behavior. **No load figures exist.**
