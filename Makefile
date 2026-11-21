@@ -6,7 +6,7 @@ COMPOSE := docker compose --env-file .env -f infrastructure/docker/docker-compos
 export
 
 .DEFAULT_GOAL := help
-.PHONY: load-seed load-baseline help env bootstrap deps frontend-deps ai-deps \
+.PHONY: up-multi load-seed load-baseline help env bootstrap deps frontend-deps ai-deps \
         up up-streaming up-apps down down-volumes ps logs \
         migrate-up migrate-down migrate-status \
         run build test test-integration lint fmt check-health \
@@ -50,11 +50,14 @@ up-streaming: env ## Start core + kafka and kafka-ui
 up-apps: env ## Start core + backend, frontend, ai-service (needs `make bootstrap` first)
 	$(COMPOSE) --profile core --profile apps up -d --build --wait
 
+up-multi: env ## Start two backend gateways (:8080 and :8082) for cross-gateway testing
+	$(COMPOSE) --profile core --profile apps --profile multi up -d --build --wait
+
 down: ## Stop all services (keeps data volumes)
-	$(COMPOSE) --profile core --profile streaming --profile apps down
+	$(COMPOSE) --profile core --profile streaming --profile apps --profile multi down
 
 down-volumes: ## Stop all services and DELETE data volumes
-	$(COMPOSE) --profile core --profile streaming --profile apps down -v
+	$(COMPOSE) --profile core --profile streaming --profile apps --profile multi down -v
 
 ps: ## Show service status
 	$(COMPOSE) --profile core --profile streaming --profile apps ps

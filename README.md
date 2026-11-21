@@ -31,7 +31,7 @@ React/TypeScript/Vite · Go · Python/FastAPI · PostgreSQL + pgvector · Redis 
 | 1 | Infra + backend foundation | Done |
 | 2 | Auth + conversations | Done |
 | 3 | Thin vertical slice: WebSocket, persistence, seq, sync, k6 baseline | Done |
-| 4A | Fast-path delivery, cross-gateway routing, cursors, receipts, presence | Not started |
+| 4A | Fast-path delivery, cross-gateway routing, cursors, receipts, presence | Done |
 | 4B | Outbox, Kafka, workers, DLQ | Not started |
 | 5 | Notifications, media pipeline, reliability | Not started |
 | 6 | Search, multi-device completion, retention/deletion | Not started |
