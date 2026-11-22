@@ -44,10 +44,10 @@ type Deps struct {
 	Presence PresenceReader // nil disables presence (endpoint reports available=false)
 	// WS handles GET /v1/ws (the WebSocket upgrade); it authenticates the handshake itself.
 	// nil leaves the route unregistered.
-	WS     http.Handler
-	Tokens TokenVerifier
-	Limiter  ratelimit.Limiter // nil disables rate limiting (tests only)
-	Logger   *slog.Logger
+	WS      http.Handler
+	Tokens  TokenVerifier
+	Limiter ratelimit.Limiter // nil disables rate limiting (tests only)
+	Logger  *slog.Logger
 	// TrustProxy makes the client IP come from the right-most X-Forwarded-For entry. Enable only
 	// when exactly one trusted reverse proxy appends that header.
 	TrustProxy bool

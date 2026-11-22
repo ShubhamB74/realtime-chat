@@ -19,7 +19,9 @@ func directOf(t *testing.T, s *postgres.Store, a, b actor) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool(t).Exec(context.Background(), `DELETE FROM conversations WHERE id = $1::uuid`, c.ID) })
+	t.Cleanup(func() {
+		_, _ = pool(t).Exec(context.Background(), `DELETE FROM conversations WHERE id = $1::uuid`, c.ID)
+	})
 	return c.ID
 }
 
@@ -255,7 +257,7 @@ func TestVisibleUsersAuthorizesPresenceSubscriptions(t *testing.T) {
 	a, b, c, d := mkActor(t, s), mkActor(t, s), mkActor(t, s), mkActor(t, s)
 	e, f, g := mkActor(t, s), mkActor(t, s), mkActor(t, s)
 	ctx := context.Background()
-	small := mkGroupOf(t, s, a, b, c)    // 3 members
+	small := mkGroupOf(t, s, a, b, c)  // 3 members
 	_ = mkGroupOf(t, s, a, d, e, f, g) // 5 members
 
 	ids := func(users ...actor) []string {

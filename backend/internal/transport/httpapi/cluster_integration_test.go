@@ -40,8 +40,8 @@ func TestTwoGatewaysDeliverToEachOther(t *testing.T) {
 	alice, bob := a.signup("alice"), a.signup("bob")
 	conv := a.direct(alice, bob)
 
-	wa := a.wsDial(alice.Access)          // alice is on gateway 1
-	wb := a.wsDialAt(gw2, bob.Access)     // bob is on gateway 2
+	wa := a.wsDial(alice.Access)      // alice is on gateway 1
+	wb := a.wsDialAt(gw2, bob.Access) // bob is on gateway 2
 
 	wa.send("message.send", "r1", map[string]any{"conversation_id": conv, "idempotency_key": "gw-key-0000001", "body": "hello from gateway 1"})
 	if acc := wa.next("message.accepted"); payload(acc)["message"].(map[string]any)["seq"].(float64) != 1 {

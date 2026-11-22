@@ -268,6 +268,9 @@ func (c *conn) revalidateLoop() {
 			ok, err := c.hub.deps.Sessions.SessionActive(ctx, c.ident.UserID, c.ident.SessionID, c.ident.DeviceID)
 			cancel()
 			if err != nil {
+				if c.ctx.Err() != nil {
+					return
+				}
 				c.hub.warnThrottled("session revalidation failed", err)
 				continue
 			}

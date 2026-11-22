@@ -75,6 +75,12 @@ type cluster struct {
 	tokens   fakeTokens
 }
 
+const (
+	presenceAliceID = "00000000-0000-4000-8000-000000000001"
+	presenceBobID   = "00000000-0000-4000-8000-000000000002"
+	presenceCarolID = "00000000-0000-4000-8000-000000000003"
+)
+
 func newCluster(t *testing.T) *cluster {
 	t.Helper()
 	return &cluster{
@@ -85,6 +91,14 @@ func newCluster(t *testing.T) *cluster {
 			"tok-bob":   {UserID: "ub", SessionID: "sb", DeviceID: "db"},
 			"tok-carol": {UserID: "uc", SessionID: "sc", DeviceID: "dc"},
 		},
+	}
+}
+
+func usePresenceUUIDs(cl *cluster) {
+	cl.tokens = fakeTokens{
+		"tok-alice": {UserID: presenceAliceID, SessionID: "sa", DeviceID: "da"},
+		"tok-bob":   {UserID: presenceBobID, SessionID: "sb", DeviceID: "db"},
+		"tok-carol": {UserID: presenceCarolID, SessionID: "sc", DeviceID: "dc"},
 	}
 }
 
@@ -151,7 +165,7 @@ func TestMessageCrossesGateways(t *testing.T) {
 
 	alice := gw1.dial(t, "tok-alice")
 	bobHere, bobThere := gw1.dial(t, "tok-bob"), gw2.dial(t, "tok-bob") // bob has a device on each gateway
-	carol := gw2.dial(t, "tok-carol")                                    // not a member
+	carol := gw2.dial(t, "tok-carol")                                   // not a member
 
 	write(t, alice, sendEv("r1", conv1, "xgw-key-00001", "hello across gateways"))
 	if ev := readEnv(t, alice); ev.Type != EvAccepted {
@@ -244,16 +258,24 @@ func TestBusSubscriptionRecoversAfterAnOutage(t *testing.T) {
 
 func TestPresenceSubscriptionsFollowUsersAcrossGateways(t *testing.T) {
 	cl := newCluster(t)
-	cl.vis = fakeVisibility{allowed: map[string][]string{"ub": {"ua"}}} // bob may watch alice, not carol
+	usePresenceUUIDs(cl)
+
+	cl.vis = fakeVisibility{
+		allowed: map[string][]string{
+			presenceBobID: {presenceAliceID},
+		},
+	}
 	gw1, gw2 := cl.addGateway("gw1", nil), cl.addGateway("gw2", nil)
 	cl.waitReady(gw1, gw2)
 	bob := gw2.dial(t, "tok-bob")
 
-	write(t, bob, event(EvPresenceSubscribe, "p1", map[string]any{"user_ids": []string{"ua", "uc"}}))
+	write(t, bob, event(EvPresenceSubscribe, "p1",
+		map[string]any{"user_ids": []string{presenceAliceID, presenceCarolID}},
+	))
 	ev := readEnv(t, bob)
 	var snap presenceSnapshot
 	payloadOf(t, ev, &snap)
-	if ev.Type != EvPresenceSnapshot || !snap.Available || len(snap.Users) != 1 || snap.Users[0].UserID != "ua" || snap.Users[0].Online {
+	if ev.Type != EvPresenceSnapshot || !snap.Available || len(snap.Users) != 1 || snap.Users[0].UserID != presenceAliceID || snap.Users[0].Online {
 		t.Fatalf("snapshot must list only visible users, offline: %+v", snap)
 	}
 
@@ -261,18 +283,18 @@ func TestPresenceSubscriptionsFollowUsersAcrossGateways(t *testing.T) {
 	ev = readEnv(t, bob)
 	var ch presenceChanged
 	payloadOf(t, ev, &ch)
-	if ev.Type != EvPresenceChanged || ch.UserID != "ua" || !ch.Online {
+	if ev.Type != EvPresenceChanged || ch.UserID != presenceAliceID || !ch.Online {
 		t.Fatalf("online event: %+v / %+v", ev, ch)
 	}
 
 	_ = alice.Close(websocket.StatusNormalClosure, "")
 	ev = readEnv(t, bob) // after the grace period
 	payloadOf(t, ev, &ch)
-	if ev.Type != EvPresenceChanged || ch.UserID != "ua" || ch.Online {
+	if ev.Type != EvPresenceChanged || ch.UserID != presenceAliceID || ch.Online {
 		t.Fatalf("offline event: %+v / %+v", ev, ch)
 	}
 
-	write(t, bob, event(EvPresenceUnsubscribe, "", map[string]any{"user_ids": []string{"ua"}}))
+	write(t, bob, event(EvPresenceUnsubscribe, "", map[string]any{"user_ids": []string{presenceAliceID}}))
 	time.Sleep(50 * time.Millisecond)
 	_ = gw1.dial(t, "tok-alice")
 	expectSilence(t, bob, 300*time.Millisecond)
@@ -280,11 +302,19 @@ func TestPresenceSubscriptionsFollowUsersAcrossGateways(t *testing.T) {
 
 func TestPresenceReconnectWithinGraceIsNotAnnouncedOffline(t *testing.T) {
 	cl := newCluster(t)
-	cl.vis = fakeVisibility{allowed: map[string][]string{"ub": {"ua"}}}
+	usePresenceUUIDs(cl)
+
+	cl.vis = fakeVisibility{
+		allowed: map[string][]string{
+			presenceBobID: {presenceAliceID},
+		},
+	}
 	gw1, gw2 := cl.addGateway("gw1", func(c *Config) { c.PresenceGrace = 400 * time.Millisecond }), cl.addGateway("gw2", nil)
 	cl.waitReady(gw1, gw2)
 	bob := gw2.dial(t, "tok-bob")
-	write(t, bob, event(EvPresenceSubscribe, "p1", map[string]any{"user_ids": []string{"ua"}}))
+	write(t, bob, event(EvPresenceSubscribe, "p1",
+		map[string]any{"user_ids": []string{presenceAliceID}},
+	))
 	readEnv(t, bob)
 
 	first := gw1.dial(t, "tok-alice")
@@ -313,11 +343,21 @@ func TestPresenceReconnectWithinGraceIsNotAnnouncedOffline(t *testing.T) {
 
 func TestPresenceSubscriptionCapAndValidation(t *testing.T) {
 	cl := newCluster(t)
-	cl.vis = fakeVisibility{allowed: map[string][]string{"ub": {"ua", "uc"}}}
+	usePresenceUUIDs(cl)
+
+	cl.vis = fakeVisibility{
+		allowed: map[string][]string{
+			presenceBobID: {presenceAliceID, presenceCarolID},
+		},
+	}
 	gw := cl.addGateway("gw1", func(c *Config) { c.MaxPresenceSubs = 1 })
 	cl.waitReady(gw)
 	bob := gw.dial(t, "tok-bob")
-	write(t, bob, event(EvPresenceSubscribe, "p1", map[string]any{"user_ids": []string{"ua", "uc"}}))
+	write(t, bob, event(EvPresenceSubscribe, "p1",
+		map[string]any{
+			"user_ids": []string{presenceAliceID, presenceCarolID},
+		},
+	))
 	if got := errCode(t, readEnv(t, bob)); got != "invalid_request" {
 		t.Errorf("over the cap: %s", got)
 	}
@@ -380,23 +420,51 @@ func TestAcksAndReadMarksAreCoalescedAndAttributedToTheCaller(t *testing.T) {
 
 func TestShutdownFlushesBufferedCursors(t *testing.T) {
 	cl := newCluster(t)
-	gw := cl.addGateway("gw1", func(c *Config) { c.FlushInterval = time.Hour })
+	gw := cl.addGateway("gw1", func(c *Config) {
+		c.FlushInterval = time.Hour
+	})
 	cl.waitReady(gw)
+
 	alice := gw.dial(t, "tok-alice")
-	write(t, alice, event(EvMessageAck, "", map[string]any{"conversation_id": conv1, "up_to_mod_seq": 7}))
+	write(t, alice, event(EvMessageAck, "", map[string]any{
+		"conversation_id": conv1,
+		"up_to_mod_seq":   7,
+	}))
+
 	time.Sleep(100 * time.Millisecond) // let the read goroutine buffer it
+
+	// Keep reading so the client acknowledges the server's close frame.
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		for {
+			_, _, err := alice.Read(context.Background())
+			if err != nil {
+				return
+			}
+		}
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+
 	if err := gw.hub.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
+
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+		t.Fatal("client reader did not stop after shutdown")
+	}
+
 	var got int64
 	for _, c := range gw.receipts.snapshot() {
 		for _, a := range c.acks {
 			got = max(got, a.UpToModSeq)
 		}
 	}
+
 	if got != 7 {
 		t.Fatalf("graceful shutdown must write buffered cursors, got %d", got)
 	}
@@ -477,7 +545,7 @@ func TestServerDrivenSyncUsesTheDevicesCursors(t *testing.T) {
 	cl.store.mu.Lock()
 	cl.store.pending = []domain.PendingSync{{ConversationID: conv1, Cursor: 1}}
 	cl.store.mu.Unlock()
-	time.Sleep(1100 * time.Millisecond) // sync requests are limited to one per second
+	time.Sleep(1100 * time.Millisecond)                           // sync requests are limited to one per second
 	write(t, alice, event(EvSyncRequest, "d1", map[string]any{})) // an empty payload object is server-driven too
 	ev = readEnv(t, alice)
 	b = syncBatch{}

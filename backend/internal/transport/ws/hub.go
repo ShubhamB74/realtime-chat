@@ -154,10 +154,10 @@ type Hub struct {
 	receiptMu   sync.Mutex
 	lastReceipt map[string][2]int64 // "conv/user" -> {delivered, read} last pushed
 
-	accepted, rejected, slow, published, delivered     atomic.Int64
-	remotePublished, remoteReceived, remoteFailed      atomic.Int64
-	remoteDropped                                      atomic.Int64
-	lastWarn                                           atomic.Int64 // unix nanos, throttles repeated warnings
+	accepted, rejected, slow, published, delivered atomic.Int64
+	remotePublished, remoteReceived, remoteFailed  atomic.Int64
+	remoteDropped                                  atomic.Int64
+	lastWarn                                       atomic.Int64 // unix nanos, throttles repeated warnings
 }
 
 // NewHub builds a gateway. Call Bind before serving and Start to enable the background workers.

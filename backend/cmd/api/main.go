@@ -105,7 +105,7 @@ func run() int {
 		return 1
 	}
 	presence := redisstore.NewPresence(rdb, "presence:") // presence store and connection registry
-	bus := redisstore.NewBus(rdb, "bus:")                 // gateway-to-gateway pub/sub
+	bus := redisstore.NewBus(rdb, "bus:")                // gateway-to-gateway pub/sub
 	hub := ws.NewHub(wsConfig(cfg), ws.Deps{
 		Sessions: store, Presence: presence, Bus: bus, Visibility: store, Tokens: tokens, Logger: logger,
 	})
