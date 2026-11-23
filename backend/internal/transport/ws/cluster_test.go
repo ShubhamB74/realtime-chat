@@ -145,9 +145,12 @@ func (g *gateway) dial(t *testing.T, token string) *websocket.Conn {
 	defer cancel()
 	url := "ws" + g.srv.URL[len("http"):]
 	h := map[string][]string{"Authorization": {"Bearer " + token}}
-	c, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: h})
+	c, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: h})
 	if err != nil {
-		t.Fatalf("dial %s on %s: %v", token, g.hub.GatewayID(), err)
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		t.Fatalf("dial %s: %v", token, err)
 	}
 	t.Cleanup(func() { _ = c.CloseNow() })
 	if ev := readEnv(t, c); ev.Type != EvReady {
